@@ -11,29 +11,30 @@ interface AccuracyTrackerProps {
   unit?: "C" | "F";
 }
 
-// Countdown timer component
+// Countdown timer component - updates every 5 minutes
 function CountdownTimer() {
-  const [timeLeft, setTimeLeft] = useState<{ hours: number; minutes: number; seconds: number }>({ hours: 0, minutes: 0, seconds: 0 });
+  const [timeLeft, setTimeLeft] = useState<{ minutes: number; seconds: number }>({ minutes: 0, seconds: 0 });
 
   useEffect(() => {
-    const calculateTimeUntilMidnight = () => {
+    const calculateTimeUntilNextPrediction = () => {
       const now = new Date();
-      const tomorrow = new Date(now);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      tomorrow.setHours(0, 0, 0, 0);
+      const currentMinutes = now.getMinutes();
+      const currentSeconds = now.getSeconds();
 
-      const diff = tomorrow.getTime() - now.getTime();
-      const hours = Math.floor(diff / (1000 * 60 * 60));
-      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+      // Find next 5-minute mark
+      const minutesUntilNext = 5 - (currentMinutes % 5);
+      const totalSecondsLeft = (minutesUntilNext * 60) - currentSeconds;
 
-      return { hours, minutes, seconds };
+      const minutes = Math.floor(totalSecondsLeft / 60);
+      const seconds = totalSecondsLeft % 60;
+
+      return { minutes, seconds };
     };
 
-    setTimeLeft(calculateTimeUntilMidnight());
+    setTimeLeft(calculateTimeUntilNextPrediction());
 
     const interval = setInterval(() => {
-      setTimeLeft(calculateTimeUntilMidnight());
+      setTimeLeft(calculateTimeUntilNextPrediction());
     }, 1000);
 
     return () => clearInterval(interval);
@@ -42,10 +43,6 @@ function CountdownTimer() {
   return (
     <div className="flex items-center gap-1 text-sm">
       <div className="flex items-center gap-1">
-        <span className="bg-purple-500/20 text-purple-300 px-2 py-1 rounded-lg font-mono font-bold min-w-[2.5rem] text-center">
-          {String(timeLeft.hours).padStart(2, '0')}
-        </span>
-        <span className="text-white/30">:</span>
         <span className="bg-purple-500/20 text-purple-300 px-2 py-1 rounded-lg font-mono font-bold min-w-[2.5rem] text-center">
           {String(timeLeft.minutes).padStart(2, '0')}
         </span>
@@ -225,18 +222,19 @@ export function AccuracyTracker({ report, isLoading, unit = "C" }: AccuracyTrack
       <div className="bg-gradient-to-r from-purple-500/10 via-cyan-500/10 to-purple-500/10 rounded-xl p-4 border border-purple-500/20">
         <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center">
+            <div className="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center relative">
               <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
+              <span className="absolute -top-1 -right-1 w-3 h-3 bg-green-500 rounded-full animate-pulse" />
             </div>
             <div>
-              <p className="text-sm font-semibold text-white">Next Prediction Comparison</p>
-              <p className="text-xs text-white/50">Daily verification at midnight</p>
+              <p className="text-sm font-semibold text-white">Next Station Comparison</p>
+              <p className="text-xs text-white/50">Predictions verified every 5 minutes</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-xs text-white/40 hidden sm:inline">Time remaining:</span>
+            <span className="text-xs text-white/40 hidden sm:inline">Next check in:</span>
             <CountdownTimer />
           </div>
         </div>

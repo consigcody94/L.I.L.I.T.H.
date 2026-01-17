@@ -48,8 +48,15 @@ export function TemperatureDisplay({
   const lowStyles = useMemo(() => getTempStyles(displayLow, unit), [displayLow, unit]);
 
   // Calculate bar position based on original Celsius values
-  const lowBarPos = ((low + 20) / 60) * 100;
-  const highBarPos = ((high + 20) / 60) * 100;
+  // Scale: -30°C (0%) to 45°C (100%) for a 75° range
+  const tempToPosition = (tempC: number) => {
+    const minTemp = -30;
+    const maxTemp = 45;
+    return ((tempC - minTemp) / (maxTemp - minTemp)) * 100;
+  };
+
+  const lowBarPos = tempToPosition(low);
+  const highBarPos = tempToPosition(high);
 
   return (
     <div className="space-y-6">
@@ -107,26 +114,28 @@ export function TemperatureDisplay({
 
         {/* Low marker */}
         <motion.div
-          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2"
-          style={{ left: `${Math.max(5, Math.min(95, lowBarPos))}%` }}
+          className="absolute top-1/2 -translate-y-1/2"
+          style={{ left: `${Math.max(8, Math.min(92, lowBarPos))}%`, transform: 'translate(-50%, -50%)' }}
           initial={{ scale: 0, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           transition={{ delay: 0.5, type: "spring" }}
         >
-          <div className={`w-5 h-5 rounded-full bg-white/90 border-2 border-blue-400 shadow-lg ${lowStyles.shadow}`} />
-          <div className="absolute -bottom-5 left-1/2 -translate-x-1/2 text-[10px] text-white/50">L</div>
+          <div className="w-6 h-6 rounded-full bg-blue-500 border-2 border-white shadow-lg shadow-blue-500/50 flex items-center justify-center">
+            <span className="text-[9px] font-bold text-white">L</span>
+          </div>
         </motion.div>
 
         {/* High marker */}
         <motion.div
-          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2"
-          style={{ left: `${Math.max(5, Math.min(95, highBarPos))}%` }}
+          className="absolute top-1/2 -translate-y-1/2"
+          style={{ left: `${Math.max(8, Math.min(92, highBarPos))}%`, transform: 'translate(-50%, -50%)' }}
           initial={{ scale: 0, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           transition={{ delay: 0.6, type: "spring" }}
         >
-          <div className={`w-5 h-5 rounded-full bg-white/90 border-2 border-red-400 shadow-lg ${highStyles.shadow}`} />
-          <div className="absolute -bottom-5 left-1/2 -translate-x-1/2 text-[10px] text-white/50">H</div>
+          <div className="w-6 h-6 rounded-full bg-red-500 border-2 border-white shadow-lg shadow-red-500/50 flex items-center justify-center">
+            <span className="text-[9px] font-bold text-white">H</span>
+          </div>
         </motion.div>
       </div>
 
