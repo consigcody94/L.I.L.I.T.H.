@@ -100,8 +100,8 @@ export function TemperatureDisplay({
       </div>
 
       {/* Temperature bar */}
-      <div className="relative">
-        <div className="relative h-3 bg-white/[0.08] rounded-full overflow-hidden backdrop-blur-sm border border-white/[0.05]">
+      <div className="relative h-8 flex items-center">
+        <div className="relative w-full h-3 bg-white/[0.08] rounded-full overflow-hidden backdrop-blur-sm border border-white/[0.05]">
           <motion.div
             className="absolute h-full bg-gradient-to-r from-blue-500 via-emerald-500 via-amber-500 to-red-500"
             initial={{ width: 0 }}
@@ -114,27 +114,35 @@ export function TemperatureDisplay({
 
         {/* Low marker */}
         <motion.div
-          className="absolute top-1/2 -translate-y-1/2"
-          style={{ left: `${Math.max(8, Math.min(92, lowBarPos))}%`, transform: 'translate(-50%, -50%)' }}
+          className="absolute"
+          style={{
+            left: `${Math.max(4, Math.min(96, lowBarPos))}%`,
+            top: '50%',
+            transform: 'translate(-50%, -50%)'
+          }}
           initial={{ scale: 0, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           transition={{ delay: 0.5, type: "spring" }}
         >
-          <div className="w-6 h-6 rounded-full bg-blue-500 border-2 border-white shadow-lg shadow-blue-500/50 flex items-center justify-center">
-            <span className="text-[9px] font-bold text-white">L</span>
+          <div className="w-7 h-7 rounded-full bg-blue-500 border-2 border-white shadow-lg shadow-blue-500/50 flex items-center justify-center">
+            <span className="text-[10px] font-bold text-white">L</span>
           </div>
         </motion.div>
 
         {/* High marker */}
         <motion.div
-          className="absolute top-1/2 -translate-y-1/2"
-          style={{ left: `${Math.max(8, Math.min(92, highBarPos))}%`, transform: 'translate(-50%, -50%)' }}
+          className="absolute"
+          style={{
+            left: `${Math.max(4, Math.min(96, highBarPos))}%`,
+            top: '50%',
+            transform: 'translate(-50%, -50%)'
+          }}
           initial={{ scale: 0, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           transition={{ delay: 0.6, type: "spring" }}
         >
-          <div className="w-6 h-6 rounded-full bg-red-500 border-2 border-white shadow-lg shadow-red-500/50 flex items-center justify-center">
-            <span className="text-[9px] font-bold text-white">H</span>
+          <div className="w-7 h-7 rounded-full bg-red-500 border-2 border-white shadow-lg shadow-red-500/50 flex items-center justify-center">
+            <span className="text-[10px] font-bold text-white">H</span>
           </div>
         </motion.div>
       </div>

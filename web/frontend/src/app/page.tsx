@@ -75,6 +75,17 @@ export default function Home() {
                 <span className="hidden sm:inline">Command Center</span>
               </Link>
 
+              {/* METAR Monitor Link */}
+              <Link
+                href="/metar"
+                className="group flex items-center gap-2 px-3 sm:px-4 py-2 bg-gradient-to-r from-cyan-500/10 to-emerald-500/10 hover:from-cyan-500/20 hover:to-emerald-500/20 border border-cyan-500/20 hover:border-cyan-400/40 rounded-xl text-cyan-300 hover:text-cyan-200 transition-all duration-300 text-sm font-medium"
+              >
+                <svg className="w-4 h-4 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" />
+                </svg>
+                <span className="hidden sm:inline">METAR</span>
+              </Link>
+
               {/* Temperature Unit Toggle */}
               <div className="flex bg-white/[0.06] backdrop-blur-sm rounded-xl p-1 border border-white/[0.08]">
                 <button

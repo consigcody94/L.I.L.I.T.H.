@@ -284,3 +284,40 @@ class AccuracyReportResponse(BaseModel):
     stats: AccuracyStats = Field(..., description="Aggregated statistics")
     recent_predictions: List[PredictionRecord] = Field(..., description="Recent prediction records")
     location_filter: Optional[str] = Field(None, description="Location filter applied")
+
+
+# ===== METAR Monitoring Schemas =====
+
+class MetarStation(BaseModel):
+    """METAR station information."""
+
+    icao: str = Field(..., description="ICAO airport code (e.g., KJFK)")
+    name: str = Field(..., description="Station name")
+    latitude: float = Field(..., description="Latitude")
+    longitude: float = Field(..., description="Longitude")
+    elevation_m: Optional[float] = Field(None, description="Elevation in meters")
+    raw_metar: Optional[str] = Field(None, description="Raw METAR string")
+    observation_time: Optional[str] = Field(None, description="Observation time")
+    is_flagged: bool = Field(False, description="Whether METAR has $ flag (maintenance needed)")
+    is_missing: bool = Field(False, description="Whether METAR is missing/stale")
+    temperature_c: Optional[float] = Field(None, description="Temperature in Celsius")
+    dewpoint_c: Optional[float] = Field(None, description="Dewpoint in Celsius")
+    wind_speed_kt: Optional[float] = Field(None, description="Wind speed in knots")
+    wind_dir: Optional[float] = Field(None, description="Wind direction in degrees")
+    visibility_sm: Optional[float] = Field(None, description="Visibility in statute miles")
+    altimeter_inhg: Optional[float] = Field(None, description="Altimeter setting in inHg")
+    weather: Optional[str] = Field(None, description="Weather phenomena")
+    clouds: Optional[str] = Field(None, description="Cloud layers")
+    last_checked: Optional[datetime] = Field(None, description="Last time this station was checked")
+
+
+class MetarMonitorResponse(BaseModel):
+    """Response for METAR monitoring."""
+
+    generated_at: datetime = Field(..., description="Response timestamp")
+    total_stations: int = Field(..., description="Total stations monitored")
+    flagged_count: int = Field(..., description="Stations with $ flag")
+    missing_count: int = Field(..., description="Stations with missing/stale data")
+    healthy_count: int = Field(..., description="Healthy stations")
+    stations: List[MetarStation] = Field(..., description="Station data")
+    next_update_seconds: int = Field(300, description="Seconds until next update")

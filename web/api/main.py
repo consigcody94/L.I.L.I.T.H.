@@ -9,8 +9,11 @@ Provides REST API for weather forecasting:
 """
 
 import time
+import asyncio
+import httpx
 from contextlib import asynccontextmanager
 from typing import Optional
+from datetime import datetime, timedelta
 
 # Make torch optional for demo mode
 try:
@@ -44,6 +47,8 @@ from web.api.schemas import (
     PredictionRecord,
     AccuracyStats,
     AccuracyReportResponse,
+    MetarStation,
+    MetarMonitorResponse,
 )
 
 # Global state for model
@@ -53,6 +58,46 @@ _config = None
 # In-memory prediction storage (would use database in production)
 _predictions: dict[str, PredictionRecord] = {}
 _prediction_counter = 0
+
+# Hourly prediction tracking for 5-minute verification
+_hourly_predictions: dict[str, dict] = {}  # key: lat_lon_datetime -> prediction data
+_hourly_verifications: list[dict] = []  # List of verification results
+_last_verification_time: datetime = None
+_verification_task = None  # Background task for 5-minute verification
+
+# METAR monitoring
+_metar_stations: dict[str, MetarStation] = {}  # ICAO code -> station data
+_metar_last_update: datetime = None
+_metar_task = None  # Background task for METAR monitoring
+
+# US airport ICAO codes for monitoring (major airports)
+US_AIRPORTS = [
+    ("KJFK", "JFK Int'l", 40.6413, -73.7781),
+    ("KLAX", "Los Angeles Int'l", 33.9416, -118.4085),
+    ("KORD", "Chicago O'Hare", 41.9742, -87.9073),
+    ("KDFW", "Dallas/Fort Worth", 32.8998, -97.0403),
+    ("KDEN", "Denver Int'l", 39.8561, -104.6737),
+    ("KATL", "Atlanta Hartsfield", 33.6407, -84.4277),
+    ("KSFO", "San Francisco Int'l", 37.6213, -122.379),
+    ("KLAS", "Las Vegas McCarran", 36.0840, -115.1537),
+    ("KMIA", "Miami Int'l", 25.7959, -80.2870),
+    ("KSEA", "Seattle-Tacoma", 47.4502, -122.3088),
+    ("KPHX", "Phoenix Sky Harbor", 33.4373, -112.0078),
+    ("KBOS", "Boston Logan", 42.3656, -71.0096),
+    ("KEWR", "Newark Liberty", 40.6895, -74.1745),
+    ("KMSP", "Minneapolis-St Paul", 44.8848, -93.2223),
+    ("KDTW", "Detroit Metro", 42.2162, -83.3554),
+    ("KPHL", "Philadelphia Int'l", 39.8729, -75.2437),
+    ("KLGA", "New York LaGuardia", 40.7769, -73.8740),
+    ("KFLL", "Fort Lauderdale", 26.0742, -80.1506),
+    ("KBWI", "Baltimore-Washington", 39.1774, -76.6684),
+    ("KSLC", "Salt Lake City", 40.7884, -111.9778),
+    ("KDCA", "Reagan National", 38.8512, -77.0402),
+    ("KSAN", "San Diego Int'l", 32.7338, -117.1933),
+    ("KIAH", "Houston Bush", 29.9902, -95.3368),
+    ("KMCO", "Orlando Int'l", 28.4312, -81.3081),
+    ("KTPA", "Tampa Int'l", 27.9756, -82.5333),
+]
 
 
 def get_forecaster():
@@ -65,7 +110,7 @@ def get_forecaster():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global _forecaster, _config
+    global _forecaster, _config, _verification_task, _metar_task
 
     logger.info("Starting LILITH API...")
 
@@ -107,10 +152,34 @@ async def lifespan(app: FastAPI):
         logger.warning("No checkpoint provided. Running in demo mode.")
         _forecaster = None
 
+    # Start background tasks
+    _verification_task = asyncio.create_task(_verification_loop())
+    logger.info("Started 5-minute verification background task")
+
+    _metar_task = asyncio.create_task(_metar_monitor_loop())
+    logger.info("Started METAR monitoring background task")
+
     yield
 
-    # Cleanup
+    # Cleanup - cancel background tasks
     logger.info("Shutting down LILITH API...")
+
+    if _verification_task:
+        _verification_task.cancel()
+        try:
+            await _verification_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Stopped verification background task")
+
+    if _metar_task:
+        _metar_task.cancel()
+        try:
+            await _metar_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Stopped METAR monitoring background task")
+
     _forecaster = None
 
 
@@ -350,21 +419,31 @@ async def create_hourly_forecast(request: HourlyForecastRequest):
     including temperature, humidity, wind, and precipitation.
     """
     if _forecaster is None:
-        return _generate_demo_hourly_forecast(request)
+        response = _generate_demo_hourly_forecast(request)
+        # Store predictions for 5-minute verification
+        for f in response.forecasts[:24]:  # Store next 24 hours
+            _store_hourly_prediction(
+                request.latitude,
+                request.longitude,
+                f.datetime[:16] + ":00",  # Round to hour
+                f.temperature,
+                f.precipitation,
+            )
+        return response
 
     try:
         # Use SimpleForecaster's hourly interface
-        response = _forecaster.forecast_hourly(
+        model_response = _forecaster.forecast_hourly(
             latitude=request.latitude,
             longitude=request.longitude,
             hours=request.hours,
         )
 
         # Convert to Pydantic model
-        import datetime
+        import datetime as dt
 
         forecasts = []
-        for h in response['hourly']:
+        for h in model_response['hourly']:
             hourly = HourlyForecast(
                 datetime=h['time'],
                 hour=h['hour'],
@@ -387,11 +466,21 @@ async def create_hourly_forecast(request: HourlyForecastRequest):
 
             forecasts.append(hourly)
 
+            # Store for 5-minute verification (first 24 hours only)
+            if len(forecasts) <= 24:
+                _store_hourly_prediction(
+                    request.latitude,
+                    request.longitude,
+                    h['time'][:16] + ":00",  # Round to hour
+                    h['temperature'],
+                    0.0,
+                )
+
         return HourlyForecastResponse(
             location=Location(latitude=request.latitude, longitude=request.longitude),
-            generated_at=response['generated_at'],
+            generated_at=model_response['generated_at'],
             model_version="SimpleLILITH v1 (hourly interpolated)",
-            forecast_hours=response['hours'],
+            forecast_hours=model_response['hours'],
             forecasts=forecasts,
         )
 
@@ -935,6 +1024,381 @@ def _generate_demo_forecast_with_storage(request: ForecastRequest, location_name
         )
 
     return response
+
+
+async def _fetch_current_weather(lat: float, lon: float) -> dict | None:
+    """Fetch current weather from Open-Meteo API."""
+    url = (
+        f"https://api.open-meteo.com/v1/forecast?"
+        f"latitude={lat}&longitude={lon}"
+        f"&current=temperature_2m,relative_humidity_2m,precipitation,weather_code"
+        f"&timezone=auto"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url)
+            if response.status_code == 200:
+                data = response.json()
+                current = data.get("current", {})
+                return {
+                    "temperature": current.get("temperature_2m"),
+                    "humidity": current.get("relative_humidity_2m"),
+                    "precipitation": current.get("precipitation"),
+                    "weather_code": current.get("weather_code"),
+                    "time": current.get("time"),
+                    "lat": lat,
+                    "lon": lon,
+                }
+    except Exception as e:
+        logger.warning(f"Failed to fetch weather for {lat},{lon}: {e}")
+
+    return None
+
+
+def _store_hourly_prediction(lat: float, lon: float, prediction_time: str, temperature: float, precipitation: float = 0):
+    """Store an hourly prediction for later verification."""
+    key = f"{lat:.4f}_{lon:.4f}_{prediction_time}"
+
+    if key not in _hourly_predictions:
+        _hourly_predictions[key] = {
+            "lat": lat,
+            "lon": lon,
+            "prediction_time": prediction_time,
+            "predicted_temp": temperature,
+            "predicted_precip": precipitation,
+            "stored_at": datetime.now().isoformat(),
+            "verified": False,
+            "actual_temp": None,
+            "actual_precip": None,
+            "temp_error": None,
+        }
+
+
+async def _verify_hourly_predictions():
+    """Verify recent hourly predictions against actual observations."""
+    global _last_verification_time
+
+    now = datetime.now()
+    _last_verification_time = now
+    verified_count = 0
+
+    # Get unique locations from stored predictions
+    locations = set()
+    for pred in _hourly_predictions.values():
+        if not pred["verified"]:
+            locations.add((pred["lat"], pred["lon"]))
+
+    # Limit to 5 locations per check to avoid rate limiting
+    locations = list(locations)[:5]
+
+    for lat, lon in locations:
+        actual = await _fetch_current_weather(lat, lon)
+        if actual and actual["temperature"] is not None:
+            current_hour = now.strftime("%Y-%m-%dT%H:00")
+            key = f"{lat:.4f}_{lon:.4f}_{current_hour}"
+
+            if key in _hourly_predictions and not _hourly_predictions[key]["verified"]:
+                pred = _hourly_predictions[key]
+                pred["verified"] = True
+                pred["actual_temp"] = actual["temperature"]
+                pred["actual_precip"] = actual.get("precipitation", 0)
+                pred["temp_error"] = round(pred["predicted_temp"] - actual["temperature"], 2)
+                pred["verified_at"] = now.isoformat()
+
+                # Store verification result
+                _hourly_verifications.append({
+                    "lat": lat,
+                    "lon": lon,
+                    "time": current_hour,
+                    "predicted": pred["predicted_temp"],
+                    "actual": actual["temperature"],
+                    "error": pred["temp_error"],
+                    "verified_at": now.isoformat(),
+                })
+
+                verified_count += 1
+                logger.info(f"Verified prediction for {lat:.2f},{lon:.2f}: predicted={pred['predicted_temp']:.1f}°C, actual={actual['temperature']:.1f}°C, error={pred['temp_error']:.1f}°C")
+
+    # Clean up old predictions (older than 24 hours)
+    cutoff = (now - timedelta(hours=24)).isoformat()
+    keys_to_remove = [k for k, v in _hourly_predictions.items() if v["stored_at"] < cutoff]
+    for k in keys_to_remove:
+        del _hourly_predictions[k]
+
+    # Keep only last 100 verifications
+    if len(_hourly_verifications) > 100:
+        _hourly_verifications[:] = _hourly_verifications[-100:]
+
+    return verified_count
+
+
+async def _verification_loop():
+    """Background loop that runs verification every 5 minutes."""
+    while True:
+        try:
+            await asyncio.sleep(300)  # 5 minutes
+            verified = await _verify_hourly_predictions()
+            logger.info(f"5-minute verification: {verified} predictions verified, {len(_hourly_predictions)} pending")
+        except asyncio.CancelledError:
+            logger.info("Verification loop cancelled")
+            break
+        except Exception as e:
+            logger.error(f"Verification error: {e}")
+
+
+
+
+@app.get("/v1/live-verification", tags=["Accuracy"])
+async def get_live_verification():
+    """Get live verification status and recent results."""
+    global _last_verification_time
+
+    # Calculate stats from verified predictions
+    verified = [v for v in _hourly_verifications]
+
+    if verified:
+        errors = [abs(v["error"]) for v in verified]
+        avg_error = sum(errors) / len(errors)
+        max_error = max(errors)
+        min_error = min(errors)
+    else:
+        avg_error = max_error = min_error = 0
+
+    # Time until next verification
+    if _last_verification_time:
+        next_check = _last_verification_time + timedelta(minutes=5)
+        seconds_until = max(0, (next_check - datetime.now()).total_seconds())
+    else:
+        seconds_until = 300
+
+    return {
+        "status": "active",
+        "pending_predictions": len([p for p in _hourly_predictions.values() if not p["verified"]]),
+        "verified_count": len(verified),
+        "last_verification": _last_verification_time.isoformat() if _last_verification_time else None,
+        "seconds_until_next": int(seconds_until),
+        "stats": {
+            "avg_error_celsius": round(avg_error, 2),
+            "max_error_celsius": round(max_error, 2),
+            "min_error_celsius": round(min_error, 2),
+        },
+        "recent_verifications": verified[-10:][::-1],  # Last 10, newest first
+    }
+
+
+@app.post("/v1/verify-now", tags=["Accuracy"])
+async def verify_now():
+    """Trigger immediate verification of pending predictions."""
+    verified = await _verify_hourly_predictions()
+    return {
+        "message": f"Verified {verified} predictions",
+        "verified_count": verified,
+        "pending": len([p for p in _hourly_predictions.values() if not p["verified"]]),
+    }
+
+
+# ===== METAR Monitoring Endpoints =====
+
+async def _fetch_metar(icao: str) -> str | None:
+    """Fetch raw METAR from Aviation Weather API."""
+    url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=raw"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url)
+            if response.status_code == 200:
+                return response.text.strip()
+    except Exception as e:
+        logger.warning(f"Failed to fetch METAR for {icao}: {e}")
+
+    return None
+
+
+def _parse_metar(raw: str, icao: str, name: str, lat: float, lon: float) -> MetarStation:
+    """Parse raw METAR string into MetarStation object."""
+    import re
+
+    station = MetarStation(
+        icao=icao,
+        name=name,
+        latitude=lat,
+        longitude=lon,
+        raw_metar=raw,
+        last_checked=datetime.now(),
+    )
+
+    if not raw:
+        station.is_missing = True
+        return station
+
+    # Check for $ flag (maintenance indicator)
+    if raw.strip().endswith('$'):
+        station.is_flagged = True
+
+    # Parse observation time (format: DDHHMMz)
+    time_match = re.search(r'\b(\d{6})Z\b', raw)
+    if time_match:
+        station.observation_time = time_match.group(1) + 'Z'
+
+    # Parse temperature/dewpoint (format: TT/DD or MTT/MDD for negative)
+    temp_match = re.search(r'\b(M?\d{2})/(M?\d{2})\b', raw)
+    if temp_match:
+        temp_str, dew_str = temp_match.groups()
+        station.temperature_c = -int(temp_str[1:]) if temp_str.startswith('M') else int(temp_str)
+        station.dewpoint_c = -int(dew_str[1:]) if dew_str.startswith('M') else int(dew_str)
+
+    # Parse wind (format: DDDSSKT or DDDSSGSSGKT)
+    wind_match = re.search(r'\b(\d{3}|VRB)(\d{2,3})(?:G(\d{2,3}))?KT\b', raw)
+    if wind_match:
+        dir_str, speed_str, gust_str = wind_match.groups()
+        station.wind_dir = int(dir_str) if dir_str != 'VRB' else 0
+        station.wind_speed_kt = int(speed_str)
+
+    # Parse visibility (format: SSM or SSSSM)
+    vis_match = re.search(r'\b(\d{1,2})SM\b', raw)
+    if vis_match:
+        station.visibility_sm = float(vis_match.group(1))
+
+    # Parse altimeter (format: ANNNN)
+    alt_match = re.search(r'\bA(\d{4})\b', raw)
+    if alt_match:
+        station.altimeter_inhg = int(alt_match.group(1)) / 100.0
+
+    # Extract cloud layers
+    clouds = re.findall(r'\b(FEW|SCT|BKN|OVC|CLR|SKC|VV)(\d{3})?\b', raw)
+    if clouds:
+        station.clouds = ' '.join([f"{c[0]}{c[1]}" if c[1] else c[0] for c in clouds])
+
+    # Extract weather phenomena
+    wx_codes = re.findall(r'\b(?:\+|-|VC)?(RA|SN|TS|FG|BR|HZ|DZ|SH|GR|GS|IC|PE|PL|UP|FZ|MI|BC|PR|DR|BL|SQ|FC|SS|DS)+\b', raw)
+    if wx_codes:
+        station.weather = ' '.join(wx_codes)
+
+    # Check if METAR is stale (observation time more than 90 minutes old)
+    if station.observation_time:
+        try:
+            obs_day = int(station.observation_time[:2])
+            obs_hour = int(station.observation_time[2:4])
+            obs_min = int(station.observation_time[4:6])
+
+            now = datetime.utcnow()
+            obs_time = now.replace(day=obs_day, hour=obs_hour, minute=obs_min, second=0)
+
+            # Handle month boundary
+            if obs_time > now:
+                obs_time = obs_time.replace(month=obs_time.month - 1 if obs_time.month > 1 else 12)
+
+            age_minutes = (now - obs_time).total_seconds() / 60
+            if age_minutes > 90:
+                station.is_missing = True
+        except:
+            pass
+
+    return station
+
+
+async def _update_all_metars():
+    """Fetch and update all monitored METAR stations."""
+    global _metar_last_update
+
+    logger.info("Updating METAR data for all stations...")
+    updated = 0
+
+    for icao, name, lat, lon in US_AIRPORTS:
+        raw = await _fetch_metar(icao)
+        station = _parse_metar(raw or "", icao, name, lat, lon)
+        _metar_stations[icao] = station
+
+        status = "FLAGGED" if station.is_flagged else ("MISSING" if station.is_missing else "OK")
+        if station.is_flagged or station.is_missing:
+            logger.warning(f"METAR {icao}: {status} - {raw[:50] if raw else 'No data'}...")
+
+        updated += 1
+        await asyncio.sleep(0.1)  # Rate limiting
+
+    _metar_last_update = datetime.now()
+    flagged = sum(1 for s in _metar_stations.values() if s.is_flagged)
+    missing = sum(1 for s in _metar_stations.values() if s.is_missing)
+    logger.info(f"Updated {updated} METAR stations. Flagged: {flagged}, Missing: {missing}")
+
+
+async def _metar_monitor_loop():
+    """Background loop that updates METAR data every 5 minutes."""
+    # Initial fetch
+    await _update_all_metars()
+
+    while True:
+        try:
+            await asyncio.sleep(300)  # 5 minutes
+            await _update_all_metars()
+        except asyncio.CancelledError:
+            logger.info("METAR monitor loop cancelled")
+            break
+        except Exception as e:
+            logger.error(f"METAR monitor error: {e}")
+
+
+
+
+@app.get("/v1/metar", response_model=MetarMonitorResponse, tags=["METAR"])
+async def get_metar_status():
+    """Get current METAR status for all monitored stations."""
+    stations = list(_metar_stations.values())
+
+    flagged = sum(1 for s in stations if s.is_flagged)
+    missing = sum(1 for s in stations if s.is_missing)
+    healthy = len(stations) - flagged - missing
+
+    # Calculate seconds until next update
+    if _metar_last_update:
+        next_update = _metar_last_update + timedelta(minutes=5)
+        seconds_until = max(0, int((next_update - datetime.now()).total_seconds()))
+    else:
+        seconds_until = 300
+
+    return MetarMonitorResponse(
+        generated_at=datetime.now(),
+        total_stations=len(stations),
+        flagged_count=flagged,
+        missing_count=missing,
+        healthy_count=healthy,
+        stations=stations,
+        next_update_seconds=seconds_until,
+    )
+
+
+@app.post("/v1/metar/refresh", tags=["METAR"])
+async def refresh_metar():
+    """Force refresh all METAR data immediately."""
+    await _update_all_metars()
+
+    stations = list(_metar_stations.values())
+    flagged = sum(1 for s in stations if s.is_flagged)
+    missing = sum(1 for s in stations if s.is_missing)
+
+    return {
+        "message": f"Refreshed {len(stations)} stations",
+        "flagged_count": flagged,
+        "missing_count": missing,
+    }
+
+
+@app.get("/v1/metar/{icao}", tags=["METAR"])
+async def get_station_metar(icao: str):
+    """Get METAR for a specific station."""
+    icao = icao.upper()
+
+    if icao in _metar_stations:
+        return _metar_stations[icao]
+
+    # Fetch on-demand if not in cache
+    raw = await _fetch_metar(icao)
+    if raw:
+        station = _parse_metar(raw, icao, icao, 0, 0)
+        return station
+
+    raise HTTPException(status_code=404, detail=f"Station {icao} not found")
 
 
 if __name__ == "__main__":
