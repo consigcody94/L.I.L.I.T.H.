@@ -13,6 +13,17 @@ interface DailyForecast {
 
 interface DailyCardsProps {
   forecasts: DailyForecast[];
+  unit?: "C" | "F";
+}
+
+// Convert Celsius to Fahrenheit
+function toFahrenheit(celsius: number): number {
+  return celsius * 9 / 5 + 32;
+}
+
+// Convert temperature based on unit
+function convertTemp(celsius: number, unit: "C" | "F"): number {
+  return unit === "F" ? toFahrenheit(celsius) : celsius;
 }
 
 function getWeatherIcon(precip: number, precipProb: number): string {
@@ -23,6 +34,7 @@ function getWeatherIcon(precip: number, precipProb: number): string {
 }
 
 function getTempGradient(high: number, low: number): string {
+  // Use Celsius values for color calculation
   const getColor = (temp: number) => {
     if (temp < 0) return "rgb(96, 165, 250)"; // blue-400
     if (temp < 10) return "rgb(34, 211, 238)"; // cyan-400
@@ -34,7 +46,7 @@ function getTempGradient(high: number, low: number): string {
   return `linear-gradient(to top, ${getColor(low)}, ${getColor(high)})`;
 }
 
-export function DailyCards({ forecasts }: DailyCardsProps) {
+export function DailyCards({ forecasts, unit = "C" }: DailyCardsProps) {
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
       {forecasts.map((forecast, index) => {
@@ -43,6 +55,9 @@ export function DailyCards({ forecasts }: DailyCardsProps) {
           forecast.precipitation,
           forecast.precipitation_probability
         );
+
+        const displayHigh = convertTemp(forecast.temperature_max, unit);
+        const displayLow = convertTemp(forecast.temperature_min, unit);
 
         return (
           <motion.div
@@ -76,10 +91,10 @@ export function DailyCards({ forecasts }: DailyCardsProps) {
               />
               <div className="text-right">
                 <p className="text-sm font-semibold text-white">
-                  {Math.round(forecast.temperature_max)}°
+                  {Math.round(displayHigh)}°{unit}
                 </p>
                 <p className="text-xs text-white/60">
-                  {Math.round(forecast.temperature_min)}°
+                  {Math.round(displayLow)}°{unit}
                 </p>
               </div>
             </div>

@@ -11,13 +11,26 @@ interface TemperatureDisplayProps {
   unit?: "C" | "F";
 }
 
-function getTempColor(temp: number): string {
-  if (temp < 0) return "text-blue-400";
-  if (temp < 10) return "text-cyan-400";
-  if (temp < 15) return "text-teal-400";
-  if (temp < 20) return "text-green-400";
-  if (temp < 25) return "text-yellow-400";
-  if (temp < 30) return "text-orange-400";
+// Convert Celsius to Fahrenheit
+function toFahrenheit(celsius: number): number {
+  return celsius * 9 / 5 + 32;
+}
+
+// Convert temperature based on unit
+function convertTemp(celsius: number, unit: "C" | "F"): number {
+  return unit === "F" ? toFahrenheit(celsius) : celsius;
+}
+
+function getTempColor(temp: number, unit: "C" | "F"): string {
+  // Normalize to Celsius for color calculation
+  const tempC = unit === "F" ? (temp - 32) * 5 / 9 : temp;
+
+  if (tempC < 0) return "text-blue-400";
+  if (tempC < 10) return "text-cyan-400";
+  if (tempC < 15) return "text-teal-400";
+  if (tempC < 20) return "text-green-400";
+  if (tempC < 25) return "text-yellow-400";
+  if (tempC < 30) return "text-orange-400";
   return "text-red-400";
 }
 
@@ -28,8 +41,15 @@ export function TemperatureDisplay({
   precipitationProbability,
   unit = "C",
 }: TemperatureDisplayProps) {
-  const highColor = useMemo(() => getTempColor(high), [high]);
-  const lowColor = useMemo(() => getTempColor(low), [low]);
+  const displayHigh = useMemo(() => convertTemp(high, unit), [high, unit]);
+  const displayLow = useMemo(() => convertTemp(low, unit), [low, unit]);
+
+  const highColor = useMemo(() => getTempColor(displayHigh, unit), [displayHigh, unit]);
+  const lowColor = useMemo(() => getTempColor(displayLow, unit), [displayLow, unit]);
+
+  // Calculate bar position based on original Celsius values
+  const lowBarPos = ((low + 20) / 60) * 100;
+  const highBarPos = ((high + 20) / 60) * 100;
 
   return (
     <div className="space-y-4">
@@ -42,7 +62,7 @@ export function TemperatureDisplay({
         >
           <p className="text-sm text-white/60 mb-1">High</p>
           <p className={`text-5xl font-bold ${highColor}`}>
-            {Math.round(high)}°
+            {Math.round(displayHigh)}°{unit}
           </p>
         </motion.div>
 
@@ -56,7 +76,7 @@ export function TemperatureDisplay({
         >
           <p className="text-sm text-white/60 mb-1">Low</p>
           <p className={`text-5xl font-bold ${lowColor}`}>
-            {Math.round(low)}°
+            {Math.round(displayLow)}°{unit}
           </p>
         </motion.div>
       </div>
@@ -72,7 +92,7 @@ export function TemperatureDisplay({
         {/* Low marker */}
         <motion.div
           className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full border-2 border-blue-400"
-          style={{ left: `${((low + 20) / 60) * 100}%` }}
+          style={{ left: `${Math.max(0, Math.min(100, lowBarPos))}%` }}
           initial={{ scale: 0 }}
           animate={{ scale: 1 }}
           transition={{ delay: 0.3 }}
@@ -80,7 +100,7 @@ export function TemperatureDisplay({
         {/* High marker */}
         <motion.div
           className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full border-2 border-red-400"
-          style={{ left: `${((high + 20) / 60) * 100}%` }}
+          style={{ left: `${Math.max(0, Math.min(100, highBarPos))}%` }}
           initial={{ scale: 0 }}
           animate={{ scale: 1 }}
           transition={{ delay: 0.4 }}
@@ -107,11 +127,11 @@ export function TemperatureDisplay({
             />
           </svg>
           <span className="text-white/80">
-            {Math.round(precipitationProbability * 100)}%
+            {Math.round(precipitationProbability * 100)}% chance
           </span>
         </div>
         <div className="text-white/60">
-          {precipitation > 0 ? `${precipitation.toFixed(1)} mm` : "No rain"}
+          {precipitation > 0 ? `${precipitation.toFixed(1)} mm` : "No rain expected"}
         </div>
       </motion.div>
     </div>

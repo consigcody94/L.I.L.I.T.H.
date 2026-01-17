@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
 interface Location {
@@ -13,77 +13,184 @@ interface LocationSearchProps {
   onLocationSelect: (location: Location) => void;
 }
 
-// Popular cities for quick selection
-const popularLocations: Location[] = [
-  { latitude: 40.7128, longitude: -74.006, name: "New York, NY" },
-  { latitude: 51.5074, longitude: -0.1278, name: "London, UK" },
-  { latitude: 35.6762, longitude: 139.6503, name: "Tokyo, Japan" },
-  { latitude: 48.8566, longitude: 2.3522, name: "Paris, France" },
-  { latitude: -33.8688, longitude: 151.2093, name: "Sydney, Australia" },
-  { latitude: 55.7558, longitude: 37.6173, name: "Moscow, Russia" },
-];
+interface NominatimResult {
+  lat: string;
+  lon: string;
+  display_name: string;
+  address?: {
+    city?: string;
+    town?: string;
+    village?: string;
+    state?: string;
+    country?: string;
+  };
+}
 
 export function LocationSearch({ onLocationSelect }: LocationSearchProps) {
   const [query, setQuery] = useState("");
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [results, setResults] = useState<Location[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const debounceRef = useRef<NodeJS.Timeout | null>(null);
 
-  const handleSearch = useCallback(async (searchQuery: string) => {
+  // Geocode using OpenStreetMap Nominatim (free, no API key required)
+  const geocodeLocation = useCallback(async (searchQuery: string) => {
     if (searchQuery.length < 2) {
       setResults([]);
       return;
     }
 
     setIsLoading(true);
+    setError(null);
 
-    // Filter popular locations by query
-    const filtered = popularLocations.filter((loc) =>
-      loc.name.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
+          searchQuery
+        )}&limit=8&addressdetails=1`,
+        {
+          headers: {
+            "User-Agent": "LILITH Weather App",
+          },
+        }
+      );
 
-    // In production, this would call a geocoding API
-    // For now, use filtered popular locations
-    setTimeout(() => {
-      setResults(filtered);
+      if (!response.ok) {
+        throw new Error("Geocoding failed");
+      }
+
+      const data: NominatimResult[] = await response.json();
+
+      const locations: Location[] = data.map((result) => {
+        // Build a cleaner name from address components
+        const parts: string[] = [];
+        if (result.address?.city || result.address?.town || result.address?.village) {
+          parts.push(result.address.city || result.address.town || result.address.village || "");
+        }
+        if (result.address?.state) {
+          parts.push(result.address.state);
+        }
+        if (result.address?.country) {
+          parts.push(result.address.country);
+        }
+
+        const name = parts.length > 0 ? parts.join(", ") : result.display_name.split(",").slice(0, 3).join(",");
+
+        return {
+          latitude: parseFloat(result.lat),
+          longitude: parseFloat(result.lon),
+          name: name,
+        };
+      });
+
+      setResults(locations);
+    } catch (err) {
+      console.error("Geocoding error:", err);
+      setError("Failed to search locations. Please try again.");
+      setResults([]);
+    } finally {
       setIsLoading(false);
-    }, 200);
+    }
   }, []);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
     setQuery(value);
-    handleSearch(value);
+
+    // Debounce the geocoding request
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+    debounceRef.current = setTimeout(() => {
+      geocodeLocation(value);
+    }, 300);
   };
 
   const handleSelect = (location: Location) => {
     setQuery(location.name);
     setIsOpen(false);
+    setResults([]);
     onLocationSelect(location);
   };
 
   const handleUseCurrentLocation = () => {
     if ("geolocation" in navigator) {
       setIsLoading(true);
+      setError(null);
       navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const location: Location = {
-            latitude: position.coords.latitude,
-            longitude: position.coords.longitude,
-            name: "Current Location",
-          };
-          setQuery(location.name);
-          setIsOpen(false);
+        async (position) => {
+          const { latitude, longitude } = position.coords;
+
+          // Reverse geocode to get location name
+          try {
+            const response = await fetch(
+              `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&addressdetails=1`,
+              {
+                headers: {
+                  "User-Agent": "LILITH Weather App",
+                },
+              }
+            );
+
+            if (response.ok) {
+              const data = await response.json();
+              const parts: string[] = [];
+              if (data.address?.city || data.address?.town || data.address?.village) {
+                parts.push(data.address.city || data.address.town || data.address.village);
+              }
+              if (data.address?.state) {
+                parts.push(data.address.state);
+              }
+
+              const location: Location = {
+                latitude,
+                longitude,
+                name: parts.length > 0 ? parts.join(", ") : "Current Location",
+              };
+
+              setQuery(location.name);
+              setIsOpen(false);
+              onLocationSelect(location);
+            } else {
+              throw new Error("Reverse geocoding failed");
+            }
+          } catch {
+            // Fallback if reverse geocoding fails
+            const location: Location = {
+              latitude,
+              longitude,
+              name: "Current Location",
+            };
+            setQuery(location.name);
+            setIsOpen(false);
+            onLocationSelect(location);
+          }
           setIsLoading(false);
-          onLocationSelect(location);
         },
         (error) => {
           console.error("Geolocation error:", error);
+          setError("Unable to get your location. Please enable location services.");
           setIsLoading(false);
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
         }
       );
+    } else {
+      setError("Geolocation is not supported by your browser.");
     }
   };
+
+  // Clean up debounce on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+    };
+  }, []);
 
   return (
     <div className="relative">
@@ -94,7 +201,7 @@ export function LocationSearch({ onLocationSelect }: LocationSearchProps) {
           value={query}
           onChange={handleInputChange}
           onFocus={() => setIsOpen(true)}
-          placeholder="Search for a location..."
+          placeholder="Search any city, address, or place..."
           className="w-full px-4 py-3 pl-12 bg-white/10 backdrop-blur-xl border border-white/20 rounded-xl text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-sky-400/50 focus:border-sky-400/50 transition-all"
         />
 
@@ -133,7 +240,8 @@ export function LocationSearch({ onLocationSelect }: LocationSearchProps) {
             {/* Use current location button */}
             <button
               onClick={handleUseCurrentLocation}
-              className="w-full px-4 py-3 flex items-center gap-3 text-left hover:bg-white/10 transition-colors border-b border-white/10"
+              disabled={isLoading}
+              className="w-full px-4 py-3 flex items-center gap-3 text-left hover:bg-white/10 transition-colors border-b border-white/10 disabled:opacity-50"
             >
               <svg
                 className="w-5 h-5 text-sky-400"
@@ -154,20 +262,27 @@ export function LocationSearch({ onLocationSelect }: LocationSearchProps) {
                   d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
                 />
               </svg>
-              <span className="text-white">Use current location</span>
+              <span className="text-white">Use my current location</span>
             </button>
 
-            {/* Search results or popular locations */}
+            {/* Error message */}
+            {error && (
+              <div className="px-4 py-2 text-red-400 text-sm bg-red-400/10">
+                {error}
+              </div>
+            )}
+
+            {/* Search results */}
             <div className="max-h-64 overflow-y-auto">
-              {(results.length > 0 ? results : popularLocations).map(
-                (location, index) => (
+              {results.length > 0 ? (
+                results.map((location, index) => (
                   <button
-                    key={`${location.latitude}-${location.longitude}`}
+                    key={`${location.latitude}-${location.longitude}-${index}`}
                     onClick={() => handleSelect(location)}
                     className="w-full px-4 py-3 flex items-center gap-3 text-left hover:bg-white/10 transition-colors"
                   >
                     <svg
-                      className="w-5 h-5 text-white/50"
+                      className="w-5 h-5 text-white/50 flex-shrink-0"
                       fill="none"
                       stroke="currentColor"
                       viewBox="0 0 24 24"
@@ -179,16 +294,23 @@ export function LocationSearch({ onLocationSelect }: LocationSearchProps) {
                         d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
                       />
                     </svg>
-                    <div>
-                      <p className="text-white">{location.name}</p>
+                    <div className="min-w-0">
+                      <p className="text-white truncate">{location.name}</p>
                       <p className="text-xs text-white/50">
-                        {location.latitude.toFixed(2)}°,{" "}
-                        {location.longitude.toFixed(2)}°
+                        {location.latitude.toFixed(4)}°, {location.longitude.toFixed(4)}°
                       </p>
                     </div>
                   </button>
-                )
-              )}
+                ))
+              ) : query.length >= 2 && !isLoading ? (
+                <div className="px-4 py-3 text-white/50 text-center">
+                  No locations found. Try a different search.
+                </div>
+              ) : query.length < 2 ? (
+                <div className="px-4 py-3 text-white/50 text-center">
+                  Type at least 2 characters to search...
+                </div>
+              ) : null}
             </div>
           </motion.div>
         )}

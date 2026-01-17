@@ -25,22 +25,33 @@ interface ForecastData {
 interface ForecastChartProps {
   data: ForecastData[];
   showUncertainty?: boolean;
+  unit?: "C" | "F";
 }
 
-export function ForecastChart({ data, showUncertainty = true }: ForecastChartProps) {
-  // Transform data for the chart
+// Convert Celsius to Fahrenheit
+function toFahrenheit(celsius: number): number {
+  return celsius * 9 / 5 + 32;
+}
+
+// Convert temperature based on unit
+function convertTemp(celsius: number, unit: "C" | "F"): number {
+  return unit === "F" ? toFahrenheit(celsius) : celsius;
+}
+
+export function ForecastChart({ data, showUncertainty = true, unit = "C" }: ForecastChartProps) {
+  // Transform data for the chart with unit conversion
   const chartData = data.map((d) => ({
     date: d.date,
     dateDisplay: format(parseISO(d.date), "MMM d"),
-    high: d.temperature_max,
-    low: d.temperature_min,
-    highUpper: d.temperature_max_upper,
-    highLower: d.temperature_max_lower,
-    lowUpper: d.temperature_min_upper,
-    lowLower: d.temperature_min_lower,
+    high: convertTemp(d.temperature_max, unit),
+    low: convertTemp(d.temperature_min, unit),
+    highUpper: d.temperature_max_upper ? convertTemp(d.temperature_max_upper, unit) : undefined,
+    highLower: d.temperature_max_lower ? convertTemp(d.temperature_max_lower, unit) : undefined,
+    lowUpper: d.temperature_min_upper ? convertTemp(d.temperature_min_upper, unit) : undefined,
+    lowLower: d.temperature_min_lower ? convertTemp(d.temperature_min_lower, unit) : undefined,
   }));
 
-  const CustomTooltip = ({ active, payload, label }: any) => {
+  const CustomTooltip = ({ active, payload }: any) => {
     if (active && payload && payload.length) {
       const data = payload[0].payload;
       return (
@@ -50,7 +61,7 @@ export function ForecastChart({ data, showUncertainty = true }: ForecastChartPro
           </p>
           <div className="space-y-1">
             <p className="text-red-400">
-              High: {Math.round(data.high)}°
+              High: {Math.round(data.high)}°{unit}
               {data.highLower && data.highUpper && (
                 <span className="text-white/50 text-sm ml-1">
                   ({Math.round(data.highLower)}° - {Math.round(data.highUpper)}°)
@@ -58,7 +69,7 @@ export function ForecastChart({ data, showUncertainty = true }: ForecastChartPro
               )}
             </p>
             <p className="text-blue-400">
-              Low: {Math.round(data.low)}°
+              Low: {Math.round(data.low)}°{unit}
               {data.lowLower && data.lowUpper && (
                 <span className="text-white/50 text-sm ml-1">
                   ({Math.round(data.lowLower)}° - {Math.round(data.lowUpper)}°)
@@ -113,7 +124,7 @@ export function ForecastChart({ data, showUncertainty = true }: ForecastChartPro
             stroke="rgba(255,255,255,0.5)"
             fontSize={12}
             tickLine={false}
-            tickFormatter={(value) => `${value}°`}
+            tickFormatter={(value) => `${Math.round(value)}°${unit}`}
             domain={["auto", "auto"]}
           />
 
