@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { format, parseISO } from "date-fns";
 import type { AccuracyReportResponse, PredictionRecord } from "@/hooks/useForecast";
@@ -8,6 +9,53 @@ interface AccuracyTrackerProps {
   report: AccuracyReportResponse | undefined;
   isLoading: boolean;
   unit?: "C" | "F";
+}
+
+// Countdown timer component
+function CountdownTimer() {
+  const [timeLeft, setTimeLeft] = useState<{ hours: number; minutes: number; seconds: number }>({ hours: 0, minutes: 0, seconds: 0 });
+
+  useEffect(() => {
+    const calculateTimeUntilMidnight = () => {
+      const now = new Date();
+      const tomorrow = new Date(now);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      tomorrow.setHours(0, 0, 0, 0);
+
+      const diff = tomorrow.getTime() - now.getTime();
+      const hours = Math.floor(diff / (1000 * 60 * 60));
+      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+
+      return { hours, minutes, seconds };
+    };
+
+    setTimeLeft(calculateTimeUntilMidnight());
+
+    const interval = setInterval(() => {
+      setTimeLeft(calculateTimeUntilMidnight());
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <div className="flex items-center gap-1 text-sm">
+      <div className="flex items-center gap-1">
+        <span className="bg-purple-500/20 text-purple-300 px-2 py-1 rounded-lg font-mono font-bold min-w-[2.5rem] text-center">
+          {String(timeLeft.hours).padStart(2, '0')}
+        </span>
+        <span className="text-white/30">:</span>
+        <span className="bg-purple-500/20 text-purple-300 px-2 py-1 rounded-lg font-mono font-bold min-w-[2.5rem] text-center">
+          {String(timeLeft.minutes).padStart(2, '0')}
+        </span>
+        <span className="text-white/30">:</span>
+        <span className="bg-purple-500/20 text-purple-300 px-2 py-1 rounded-lg font-mono font-bold min-w-[2.5rem] text-center">
+          {String(timeLeft.seconds).padStart(2, '0')}
+        </span>
+      </div>
+    </div>
+  );
 }
 
 // Convert Celsius to Fahrenheit
@@ -173,6 +221,27 @@ export function AccuracyTracker({ report, isLoading, unit = "C" }: AccuracyTrack
 
   return (
     <div className="space-y-6">
+      {/* Next Comparison Countdown */}
+      <div className="bg-gradient-to-r from-purple-500/10 via-cyan-500/10 to-purple-500/10 rounded-xl p-4 border border-purple-500/20">
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center">
+              <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-white">Next Prediction Comparison</p>
+              <p className="text-xs text-white/50">Daily verification at midnight</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-white/40 hidden sm:inline">Time remaining:</span>
+            <CountdownTimer />
+          </div>
+        </div>
+      </div>
+
       {/* Stats overview */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard

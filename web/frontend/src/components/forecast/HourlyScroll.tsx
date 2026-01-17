@@ -71,21 +71,21 @@ export function HourlyScroll({ forecasts, unit = "C" }: HourlyScrollProps) {
   };
 
   return (
-    <div className="relative">
+    <div className="relative group/scroll">
       {/* Scroll buttons */}
       <button
         onClick={() => scroll("left")}
-        className="absolute left-0 top-1/2 -translate-y-1/2 z-10 bg-slate-800/80 hover:bg-slate-700 p-2 rounded-full shadow-lg backdrop-blur-sm"
+        className="absolute left-0 top-1/2 -translate-y-1/2 z-10 bg-white/[0.08] hover:bg-white/[0.15] backdrop-blur-md p-2.5 rounded-xl shadow-lg border border-white/[0.1] opacity-0 group-hover/scroll:opacity-100 transition-all duration-300 hover:scale-110"
       >
-        <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
         </svg>
       </button>
       <button
         onClick={() => scroll("right")}
-        className="absolute right-0 top-1/2 -translate-y-1/2 z-10 bg-slate-800/80 hover:bg-slate-700 p-2 rounded-full shadow-lg backdrop-blur-sm"
+        className="absolute right-0 top-1/2 -translate-y-1/2 z-10 bg-white/[0.08] hover:bg-white/[0.15] backdrop-blur-md p-2.5 rounded-xl shadow-lg border border-white/[0.1] opacity-0 group-hover/scroll:opacity-100 transition-all duration-300 hover:scale-110"
       >
-        <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
         </svg>
       </button>
@@ -93,7 +93,7 @@ export function HourlyScroll({ forecasts, unit = "C" }: HourlyScrollProps) {
       {/* Scrollable container */}
       <div
         ref={scrollRef}
-        className="flex gap-3 overflow-x-auto scrollbar-hide px-8 py-2"
+        className="flex gap-4 overflow-x-auto scrollbar-hide px-10 py-2"
         style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
       >
         {forecasts.map((hour, index) => {
@@ -103,52 +103,79 @@ export function HourlyScroll({ forecasts, unit = "C" }: HourlyScrollProps) {
           const displayFeelsLike = convertTemp(hour.feels_like, unit);
           const tempColor = getTempColor(hour.temperature);
           const isNewDay = index === 0 || hour.hour === 0;
+          const isNow = index === 0;
 
           return (
             <motion.div
               key={hour.datetime}
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ delay: index * 0.02 }}
-              className={`flex-shrink-0 w-24 bg-white/5 backdrop-blur-sm border border-white/10 rounded-xl p-3 text-center hover:bg-white/10 transition-colors ${
-                isNewDay ? "border-l-2 border-l-sky-500" : ""
-              }`}
+              initial={{ opacity: 0, y: 20, scale: 0.9 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              transition={{ delay: index * 0.02, type: "spring", stiffness: 120 }}
+              whileHover={{ scale: 1.05, y: -4 }}
+              className={`
+                group flex-shrink-0 w-[88px] rounded-2xl p-3 text-center cursor-pointer
+                transition-all duration-300 relative overflow-hidden
+                ${isNow
+                  ? "bg-gradient-to-br from-cyan-500/20 to-blue-500/20 border-2 border-cyan-500/30"
+                  : isNewDay
+                    ? "bg-white/[0.04] border border-purple-500/30 border-l-2 border-l-purple-500"
+                    : "bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.08] hover:border-white/[0.12]"
+                }
+              `}
             >
+              {/* Now badge */}
+              {isNow && (
+                <div className="absolute -top-0.5 -right-0.5">
+                  <span className="inline-flex items-center px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider bg-cyan-500 text-white rounded-full shadow-lg shadow-cyan-500/50">
+                    Now
+                  </span>
+                </div>
+              )}
+
               {/* Time */}
-              <p className="text-xs text-white/50 mb-1">
-                {isNewDay && format(time, "MMM d")}
-              </p>
-              <p className="text-sm font-medium text-white/80">
+              {isNewDay && (
+                <p className="text-[10px] text-purple-400/80 font-medium mb-0.5">
+                  {format(time, "MMM d")}
+                </p>
+              )}
+              <p className={`text-sm font-semibold ${isNow ? "text-white" : "text-white/70"}`}>
                 {format(time, "h a")}
               </p>
 
-              {/* Weather icon */}
-              <div className="text-2xl my-2">{icon}</div>
+              {/* Weather icon with glow */}
+              <div className="relative my-2">
+                <span className="text-3xl relative z-10 drop-shadow-lg">{icon}</span>
+                <div className="absolute inset-0 blur-lg opacity-40 text-3xl flex items-center justify-center">
+                  {icon}
+                </div>
+              </div>
 
               {/* Temperature */}
-              <p className={`text-lg font-bold ${tempColor}`}>
+              <p className={`text-xl font-bold ${tempColor}`}>
                 {Math.round(displayTemp)}°
               </p>
-              <p className="text-xs text-white/50">
+              <p className="text-[10px] text-white/40 mt-0.5">
                 Feels {Math.round(displayFeelsLike)}°
               </p>
 
               {/* Precipitation */}
               {hour.precipitation_probability > 0.1 && (
-                <div className="mt-2 text-xs text-blue-400">
-                  💧 {Math.round(hour.precipitation_probability * 100)}%
+                <div className="mt-2 flex items-center justify-center gap-1">
+                  <svg className="w-3 h-3 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M5.5 17a4.5 4.5 0 01-1.44-8.765 4.5 4.5 0 018.302-3.046 3.5 3.5 0 014.504 4.272A4 4 0 0115 17H5.5z" clipRule="evenodd" />
+                  </svg>
+                  <span className="text-[10px] font-medium text-blue-400">
+                    {Math.round(hour.precipitation_probability * 100)}%
+                  </span>
                 </div>
               )}
 
               {/* Wind */}
-              <div className="mt-1 text-xs text-white/50 flex items-center justify-center gap-1">
-                <span>{getWindArrow(hour.wind_direction)}</span>
-                <span>{Math.round(hour.wind_speed)} m/s</span>
-              </div>
-
-              {/* Humidity */}
-              <div className="mt-1 text-xs text-white/40">
-                {Math.round(hour.humidity)}% RH
+              <div className="mt-1.5 pt-1.5 border-t border-white/[0.06]">
+                <div className="text-[10px] text-white/40 flex items-center justify-center gap-1">
+                  <span className="font-medium">{getWindArrow(hour.wind_direction)}</span>
+                  <span>{Math.round(hour.wind_speed)} m/s</span>
+                </div>
               </div>
             </motion.div>
           );
@@ -156,8 +183,8 @@ export function HourlyScroll({ forecasts, unit = "C" }: HourlyScrollProps) {
       </div>
 
       {/* Gradient overlays */}
-      <div className="absolute left-8 top-0 bottom-0 w-8 bg-gradient-to-r from-slate-900/50 to-transparent pointer-events-none" />
-      <div className="absolute right-8 top-0 bottom-0 w-8 bg-gradient-to-l from-slate-900/50 to-transparent pointer-events-none" />
+      <div className="absolute left-10 top-0 bottom-0 w-12 bg-gradient-to-r from-black/40 to-transparent pointer-events-none" />
+      <div className="absolute right-10 top-0 bottom-0 w-12 bg-gradient-to-l from-black/40 to-transparent pointer-events-none" />
     </div>
   );
 }
