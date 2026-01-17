@@ -1,0 +1,45 @@
+# LILITH Inference Dockerfile
+# Optimized for GPU inference with minimal size
+
+FROM nvidia/cuda:12.1-runtime-ubuntu22.04 AS base
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-venv \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create app directory
+WORKDIR /app
+
+# Copy requirements
+COPY pyproject.toml ./
+
+# Install Python dependencies
+RUN pip3 install --upgrade pip && \
+    pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu121 && \
+    pip3 install ".[inference]"
+
+# Copy application code
+COPY lilith/ ./lilith/
+COPY models/ ./models/
+COPY inference/ ./inference/
+COPY web/api/ ./web/api/
+COPY data/ ./data/
+
+# Expose port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Run the API server
+CMD ["uvicorn", "web.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

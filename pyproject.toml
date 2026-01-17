@@ -1,0 +1,176 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lilith"
+version = "0.1.0"
+description = "Long-range Intelligent Learning for Integrated Trend Hindcasting - 90-day weather forecasting"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [
+    { name = "LILITH Contributors" }
+]
+keywords = [
+    "weather",
+    "forecasting",
+    "machine-learning",
+    "climate",
+    "deep-learning",
+    "pytorch",
+    "transformer"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    # Core ML
+    "torch>=2.1.0",
+    "torchvision>=0.16.0",
+    "lightning>=2.1.0",
+
+    # Graph Neural Networks
+    "torch-geometric>=2.4.0",
+
+    # Transformers & Attention
+    "xformers>=0.0.23",
+    "einops>=0.7.0",
+
+    # Data Processing
+    "numpy>=1.24.0",
+    "pandas>=2.0.0",
+    "polars>=0.19.0",
+    "xarray>=2023.10.0",
+    "zarr>=2.16.0",
+    "pyarrow>=14.0.0",
+    "h5py>=3.10.0",
+
+    # Scientific Computing
+    "scipy>=1.11.0",
+    "scikit-learn>=1.3.0",
+
+    # Geospatial
+    "cartopy>=0.22.0",
+    "pyproj>=3.6.0",
+
+    # API & Web
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.5.0",
+    "httpx>=0.25.0",
+
+    # Database
+    "sqlalchemy>=2.0.0",
+    "asyncpg>=0.29.0",
+    "redis>=5.0.0",
+
+    # Utilities
+    "tqdm>=4.66.0",
+    "rich>=13.7.0",
+    "typer>=0.9.0",
+    "python-dotenv>=1.0.0",
+    "pyyaml>=6.0.0",
+    "omegaconf>=2.3.0",
+
+    # Logging & Monitoring
+    "loguru>=0.7.0",
+    "wandb>=0.16.0",
+
+    # Visualization
+    "matplotlib>=3.8.0",
+    "plotly>=5.18.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "pytest-asyncio>=0.21.0",
+    "ruff>=0.1.0",
+    "black>=23.10.0",
+    "mypy>=1.6.0",
+    "pre-commit>=3.5.0",
+    "ipython>=8.17.0",
+    "jupyter>=1.0.0",
+    "nbformat>=5.9.0",
+]
+
+train = [
+    "deepspeed>=0.12.0",
+    "bitsandbytes>=0.41.0",
+    "accelerate>=0.24.0",
+    "tensorboard>=2.15.0",
+]
+
+inference = [
+    "onnx>=1.15.0",
+    "onnxruntime-gpu>=1.16.0",
+    "tritonclient[all]>=2.39.0",
+    "ray[serve]>=2.8.0",
+]
+
+all = [
+    "lilith[dev,train,inference]",
+]
+
+[project.scripts]
+lilith = "lilith.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/lilith-weather/lilith"
+Documentation = "https://lilith-weather.github.io/lilith"
+Repository = "https://github.com/lilith-weather/lilith"
+Issues = "https://github.com/lilith-weather/lilith/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["lilith"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # Pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "ARG",  # flake8-unused-arguments
+    "SIM",  # flake8-simplify
+]
+ignore = [
+    "E501",   # line too long (handled by black)
+    "B008",   # do not perform function calls in argument defaults
+    "B905",   # zip without explicit strict
+]
+
+[tool.ruff.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/*" = ["ARG"]
+
+[tool.black]
+target-version = ["py310", "py311", "py312"]
+line-length = 100
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-v --cov=lilith --cov-report=term-missing"

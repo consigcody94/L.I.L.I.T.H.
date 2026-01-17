@@ -1,0 +1,65 @@
+# LILITH-Large Configuration
+# ~400M parameters, high accuracy
+
+model:
+  variant: large
+  hidden_dim: 384
+  num_heads: 12
+  ffn_dim: 1536
+
+  # Input/Output
+  input_features: 7
+  output_features: 3
+  sequence_length: 30
+  forecast_length: 90
+
+  # Component depths
+  gat_layers: 4
+  temporal_layers: 8
+  sfno_layers: 6
+
+  # Grid configuration
+  use_grid: true
+  nlat: 128
+  nlon: 256
+
+  # Features
+  use_climate_embed: true
+  use_solar_position: true
+  use_flash_attention: true
+  use_rope: true
+
+  # Ensemble
+  ensemble_method: diffusion
+  ensemble_members: 20
+
+  # Regularization
+  dropout: 0.1
+
+  # Memory optimization
+  gradient_checkpointing: true
+
+training:
+  learning_rate: 5e-5
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  warmup_steps: 2000
+  max_steps: 200000
+
+  batch_size: 4
+  gradient_accumulation_steps: 8
+
+  use_amp: true
+  amp_dtype: bfloat16
+
+  use_deepspeed: true
+  deepspeed_stage: 2
+
+  curriculum_enabled: true
+  curriculum_stages: [7, 14, 30, 60, 90]
+  curriculum_switch_steps: [20000, 60000, 120000, 160000]
+
+inference:
+  quantization: static_int8
+  batch_size: 8
+  max_stations: 500

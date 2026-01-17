@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <defs>
+    <linearGradient id="stormGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1e3a5f;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#3b82f6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0ea5e9;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="lightningGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#fbbf24;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#f59e0b;stop-opacity:1" />
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background circle -->
+  <circle cx="60" cy="60" r="56" fill="url(#stormGradient)" stroke="#60a5fa" stroke-width="2"/>
+
+  <!-- Storm cloud -->
+  <g fill="#e2e8f0" opacity="0.95">
+    <ellipse cx="50" cy="50" rx="22" ry="16"/>
+    <ellipse cx="72" cy="52" rx="18" ry="14"/>
+    <ellipse cx="38" cy="54" rx="14" ry="10"/>
+    <ellipse cx="60" cy="58" rx="20" ry="12"/>
+  </g>
+
+  <!-- Lightning bolt -->
+  <g filter="url(#glow)">
+    <polygon
+      points="58,62 48,78 56,78 52,98 68,74 60,74 66,62"
+      fill="url(#lightningGradient)"
+      stroke="#fcd34d"
+      stroke-width="1"
+    />
+  </g>
+
+  <!-- Wind lines -->
+  <g stroke="#94a3b8" stroke-width="2" stroke-linecap="round" fill="none" opacity="0.7">
+    <path d="M20,72 Q35,68 45,72"/>
+    <path d="M18,82 Q38,76 52,82"/>
+    <path d="M22,92 Q40,86 55,92"/>
+  </g>
+
+  <!-- Rain drops -->
+  <g fill="#60a5fa" opacity="0.6">
+    <ellipse cx="78" cy="78" rx="2" ry="4"/>
+    <ellipse cx="85" cy="88" rx="2" ry="4"/>
+    <ellipse cx="92" cy="76" rx="2" ry="4"/>
+    <ellipse cx="88" cy="96" rx="2" ry="4"/>
+    <ellipse cx="96" cy="86" rx="2" ry="4"/>
+  </g>
+</svg>

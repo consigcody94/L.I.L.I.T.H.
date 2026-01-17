@@ -1,0 +1,76 @@
+version: "3.8"
+
+services:
+  # LILITH API Server
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.inference
+    ports:
+      - "8000:8000"
+    environment:
+      - LILITH_CHECKPOINT=/app/checkpoints/checkpoint_best.pt
+      - LILITH_ENCODER=/app/data/storage/parquet/encoder.json
+      - LILITH_STATIONS=/app/data/storage/parquet/stations.parquet
+    volumes:
+      - ../checkpoints:/app/checkpoints:ro
+      - ../data/storage:/app/data/storage:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Web Frontend
+  web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.web
+      args:
+        - NEXT_PUBLIC_API_URL=http://api:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    restart: unless-stopped
+
+  # Redis Cache (optional)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+
+  # PostgreSQL + TimescaleDB (optional, for historical data)
+  db:
+    image: timescale/timescaledb:latest-pg15
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=lilith
+      - POSTGRES_PASSWORD=lilith_secret
+      - POSTGRES_DB=lilith
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  postgres_data:
+
+networks:
+  default:
+    name: lilith_network
