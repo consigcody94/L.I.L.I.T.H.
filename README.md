@@ -1,23 +1,31 @@
-<p align="center">
-  <img src="web/frontend/public/images/logo.png" alt="L.I.L.I.T.H" width="200" height="200">
-</p>
+---
+language: en
+tags:
+- weather
+- time-series
+- pytorch
+- climate
+license: apache-2.0
+model-index:
+- name: LILITH
+  results: []
+---
 
-<h1 align="center">L.I.L.I.T.H.</h1>
+# L.I.L.I.T.H. (Long-range Intelligent Learning for Integrated Trend Hindcasting)
+
+**A lightweight, open-source weather prediction model trained on GHCN data.**
 
 <p align="center">
-  <strong>Long-range Intelligent Learning for Integrated Trend Hindcasting</strong>
-</p>
-
-<p align="center">
-  <em>Named after Lilitu, the Mesopotamian storm goddess who commanded the winds</em>
-</p>
-
-<p align="center">
+  <a href="https://huggingface.co/consigcody94/Lilith-Weather"><img src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Model-yellow" alt="Hugging Face Model"></a>
   <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+"></a>
   <a href="https://pytorch.org/"><img src="https://img.shields.io/badge/PyTorch-2.1+-ee4c2c.svg" alt="PyTorch"></a>
   <a href="https://github.com/consigcody94/lilith/actions"><img src="https://img.shields.io/badge/build-passing-brightgreen.svg" alt="Build"></a>
 </p>
+
+## Model Description
+
+LILITH is a transformer-based weather forecasting model designed to run on consumer hardware (e.g., RTX 3060). It learns from 150+ years of station-based observations (GHCN-Daily) to predict 90-day temperature and precipitation trends with uncertainty quantification.
 
 <p align="center">
   <a href="#why-lilith">Why LILITH</a> •
