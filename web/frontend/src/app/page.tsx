@@ -366,7 +366,7 @@ export default function Home() {
                     Historical
                   </Link>
                   <a
-                    href="https://github.com/consigcody94/lilith"
+                    href="https://github.com/consigcody94/L.I.L.I.T.H."
                     className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm text-white/50 hover:text-white hover:bg-white/[0.05] transition-all duration-300"
                     target="_blank"
                     rel="noopener noreferrer"

@@ -47,7 +47,7 @@ export function Hero() {
                         View Forecast
                     </button>
                     <a
-                        href="https://github.com/consigcody94/lilith"
+                        href="https://github.com/consigcody94/L.I.L.I.T.H."
                         target="_blank"
                         rel="noopener noreferrer"
                         className="px-8 py-4 bg-white/5 border border-white/10 rounded-xl font-bold text-white hover:bg-white/10 transition-all hover:border-white/20"

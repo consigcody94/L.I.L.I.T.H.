@@ -127,10 +127,10 @@ all = [
 lilith = "lilith.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/lilith-weather/lilith"
-Documentation = "https://lilith-weather.github.io/lilith"
-Repository = "https://github.com/lilith-weather/lilith"
-Issues = "https://github.com/lilith-weather/lilith/issues"
+Homepage = "https://github.com/consigcody94/L.I.L.I.T.H."
+Documentation = "https://github.com/consigcody94/L.I.L.I.T.H.#readme"
+Repository = "https://github.com/consigcody94/L.I.L.I.T.H."
+Issues = "https://github.com/consigcody94/L.I.L.I.T.H./issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["lilith"]

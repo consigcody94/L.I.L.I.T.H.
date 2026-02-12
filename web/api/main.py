@@ -99,16 +99,12 @@ async def lifespan(app: FastAPI):
     from web.api.services.weather_service import WeatherService
     
     # Initialize Weather Service
-    # Using hardcoded key for now as requested by user in chat
-    # "3cf111d374a2211f222bb05149f298ad" 
-    # Get OpenWeatherMap API key from environment variable
-    api_key = os.environ.get("OPENWEATHER_API_KEY", "YOUR_OPENWEATHER_API_KEY_HERE")
+    api_key = os.environ.get("OPENWEATHER_API_KEY", "")
     _weather_service = WeatherService(api_key=api_key)
 
     logger.info("Starting LILITH API...")
 
-    # Load configuration
-    # Load configuration
+    # Load model checkpoint
     from pathlib import Path
 
     checkpoint_path = os.environ.get("LILITH_CHECKPOINT", None)
