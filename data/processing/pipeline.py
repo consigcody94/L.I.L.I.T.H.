@@ -86,8 +86,8 @@ class FeatureEncoder:
         if isinstance(df.index, pd.DatetimeIndex):
             # Day of year (cyclical)
             day_of_year = df.index.dayofyear
-            result["day_sin"] = np.sin(2 * np.pi * day_of_year / 365)
-            result["day_cos"] = np.cos(2 * np.pi * day_of_year / 365)
+            result["day_sin"] = np.sin(2 * np.pi * day_of_year / 365.25)
+            result["day_cos"] = np.cos(2 * np.pi * day_of_year / 365.25)
 
             # Month (cyclical)
             month = df.index.month
@@ -212,12 +212,15 @@ class SpatialGridder:
         # IDW interpolation
         for i, lat in enumerate(self.lat_grid):
             for j, lon in enumerate(self.lon_grid):
-                # Calculate distances to all stations
-                dlat = station_lats - lat
-                dlon = station_lons - lon
+                # Calculate distances to all stations using Haversine formula
+                lat1_rad = np.radians(lat)
+                lat2_rad = np.radians(station_lats)
+                dlat = np.radians(station_lats - lat)
+                dlon = np.radians(station_lons - lon)
 
-                # Approximate distance in degrees
-                distances = np.sqrt(dlat**2 + dlon**2)
+                # Haversine distance in degrees (approximate by converting back)
+                a = np.sin(dlat / 2) ** 2 + np.cos(lat1_rad) * np.cos(lat2_rad) * np.sin(dlon / 2) ** 2
+                distances = np.degrees(2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a)))
 
                 # Find stations within max distance
                 mask = distances < self.max_distance

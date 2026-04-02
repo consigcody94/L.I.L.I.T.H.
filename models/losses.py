@@ -323,11 +323,14 @@ class CRPSLoss(nn.Module):
         # Term 1: E[|X - y|]
         term1 = (samples - target.unsqueeze(0)).abs().mean(dim=0)
 
-        # Term 2: E[|X - X'|] / 2
-        # Approximate with pairs of samples
+        # Term 2: E[|X - X'|] / 2, using Fair CRPS correction (Ferro 2014)
+        # Fair CRPS multiplies by n/(n-1) to make it an unbiased estimator
+        # for finite ensemble sizes
         idx1 = torch.randperm(n_samples, device=samples.device)
         idx2 = torch.randperm(n_samples, device=samples.device)
         term2 = (samples[idx1] - samples[idx2]).abs().mean(dim=0) / 2
+        if n_samples > 1:
+            term2 = term2 * n_samples / (n_samples - 1)  # Fair CRPS correction
 
         crps = term1 - term2
 
@@ -338,6 +341,70 @@ class CRPSLoss(nn.Module):
             n_valid = crps.numel()
 
         return crps.sum() / (n_valid + 1e-8)
+
+
+class EnergyScoreLoss(nn.Module):
+    """
+    Energy Score for multivariate probabilistic forecasts.
+
+    Multivariate generalization of CRPS (Gneiting & Raftery 2007).
+    Proper scoring rule that evaluates calibration and sharpness
+    of multivariate ensemble forecasts.
+
+    ES = E[||X - y||] - 0.5 * E[||X - X'||]
+
+    where ||.|| is the Euclidean norm over all variables.
+    """
+
+    def __init__(self, fair: bool = True):
+        """
+        Args:
+            fair: Use fair correction for finite ensembles (Ferro 2014)
+        """
+        super().__init__()
+        self.fair = fair
+
+    def forward(
+        self,
+        samples: torch.Tensor,
+        target: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Compute Energy Score.
+
+        Args:
+            samples: Ensemble samples (n_samples, batch, ..., n_vars)
+            target: Target values (batch, ..., n_vars)
+            mask: Valid value mask (batch, ...)
+
+        Returns:
+            Scalar energy score
+        """
+        n_samples = samples.size(0)
+
+        # Term 1: E[||X - y||] (Euclidean norm over variable dimension)
+        diff1 = (samples - target.unsqueeze(0))  # (n_samples, batch, ..., n_vars)
+        term1 = diff1.norm(dim=-1).mean(dim=0)  # (batch, ...)
+
+        # Term 2: E[||X - X'||] / 2
+        idx1 = torch.randperm(n_samples, device=samples.device)
+        idx2 = torch.randperm(n_samples, device=samples.device)
+        diff2 = samples[idx1] - samples[idx2]
+        term2 = diff2.norm(dim=-1).mean(dim=0) / 2
+
+        if self.fair and n_samples > 1:
+            term2 = term2 * n_samples / (n_samples - 1)
+
+        es = term1 - term2
+
+        if mask is not None:
+            es = es * mask.float()
+            n_valid = mask.sum()
+        else:
+            n_valid = es.numel()
+
+        return es.sum() / (n_valid + 1e-8)
 
 
 class SpectralLoss(nn.Module):

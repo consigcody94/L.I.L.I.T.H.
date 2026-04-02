@@ -259,12 +259,12 @@ class TemporalPositionEncoding(nn.Module):
             Temporal encoding of shape (batch, seq_len, d_model)
         """
         # Day of year (cyclical)
-        day_rad = 2 * math.pi * day_of_year / 365.0
+        day_rad = 2 * math.pi * day_of_year / 365.25
         day_sin = torch.sin(day_rad)
         day_cos = torch.cos(day_rad)
 
         # Month (cyclical) - approximate from day
-        month_rad = 2 * math.pi * day_of_year / 30.0
+        month_rad = 2 * math.pi * day_of_year / 30.4375  # 365.25 / 12
         month_sin = torch.sin(month_rad)
         month_cos = torch.cos(month_rad)
 

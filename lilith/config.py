@@ -81,7 +81,7 @@ class TrainingConfig:
     epochs: int = 100
     batch_size: int = 32
     learning_rate: float = 1e-4
-    weight_decay: float = 0.01
+    weight_decay: float = 0.05
     warmup_steps: int = 1000
 
     # Optimization
@@ -96,7 +96,7 @@ class TrainingConfig:
 
     # Curriculum learning
     curriculum: bool = True
-    curriculum_stages: list[int] = field(default_factory=lambda: [7, 14, 42, 90])
+    curriculum_stages: list[int] = field(default_factory=lambda: [7, 14, 30, 60, 90])
 
     # Checkpointing
     checkpoint_dir: str = "checkpoints"

@@ -51,8 +51,8 @@ class SpectralConv2d(nn.Module):
         self.modes1 = modes1
         self.modes2 = modes2
 
-        # Learnable Fourier coefficients
-        scale = 1 / (in_channels * out_channels)
+        # Learnable Fourier coefficients (Xavier-like initialization for spectral domain)
+        scale = 1 / math.sqrt(in_channels * out_channels)
         self.weights1 = nn.Parameter(
             scale * torch.randn(in_channels, out_channels, modes1, modes2, dtype=torch.cfloat)
         )

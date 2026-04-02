@@ -81,9 +81,9 @@ class SeasonalEmbedding(nn.Module):
             features.extend([torch.zeros_like(day_of_year)] * (2 * self.max_harmonics))
 
         # Solar declination (approximate)
-        # Maximum ~23.45 degrees on summer solstice
-        declination = 23.45 * torch.sin(2 * math.pi * (day_of_year - 81) / 365.25)
-        features.append(declination / 23.45)  # Normalize
+        # Maximum ~23.4393 degrees on summer solstice (IAU 2006 obliquity at J2000.0)
+        declination = 23.4393 * torch.sin(2 * math.pi * (day_of_year - 81) / 365.25)
+        features.append(declination / 23.4393)  # Normalize
 
         # Equation of time (minutes, approximate)
         B = 2 * math.pi * (day_of_year - 81) / 365.25
@@ -217,8 +217,8 @@ class SolarPositionEmbedding(nn.Module):
         if lon.dim() == 1:
             lon = lon.unsqueeze(-1)
 
-        # Solar declination (degrees)
-        declination = 23.45 * torch.sin(
+        # Solar declination (degrees) - IAU 2006 obliquity at J2000.0
+        declination = 23.4393 * torch.sin(
             torch.deg2rad(torch.tensor(360 / 365.25 * (day_of_year - 81)))
         )
 
@@ -263,7 +263,7 @@ class SolarPositionEmbedding(nn.Module):
             torch.sin(solar_azimuth),
             torch.cos(solar_azimuth),
             day_length / 24.0,
-            declination / 23.45,
+            declination / 23.4393,
         ], dim=-1)
 
         return self.norm(self.proj(features))

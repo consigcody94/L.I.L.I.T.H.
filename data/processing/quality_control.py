@@ -44,8 +44,9 @@ class QCConfig:
     wind_min: float = 0.0
     wind_max: float = 120.0
 
-    # Pressure bounds (hPa)
-    pressure_min: float = 870.0
+    # Pressure bounds (hPa) - 870 hPa was Typhoon Tip 1979 (lowest recorded);
+    # use 850 for operational tolerance at high-altitude stations
+    pressure_min: float = 850.0
     pressure_max: float = 1085.0
 
     # Spike detection
@@ -205,8 +206,17 @@ class QualityController:
             rolling_std = df[col].rolling(window, center=True, min_periods=1).std()
 
             # Flag values that deviate too much from rolling mean
+            # Use variable-specific minimum std to avoid false positives during stable weather
             deviation = np.abs(df[col] - rolling_mean)
-            threshold = cfg.spike_threshold * rolling_std.clip(lower=0.1)  # Minimum std
+            if "temp" in col.lower() or col in ["TMAX", "TMIN", "TAVG"]:
+                min_std = 1.0  # 1°C minimum - stable weather can have <0.5°C variation
+            elif "prcp" in col.lower() or col in ["PRCP"]:
+                min_std = 0.5
+            elif "pressure" in col.lower():
+                min_std = 0.5
+            else:
+                min_std = 0.1
+            threshold = cfg.spike_threshold * rolling_std.clip(lower=min_std)
 
             mask = deviation > threshold
             mask = mask & ~df[col].isna()  # Don't flag already-missing values

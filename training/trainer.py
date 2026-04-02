@@ -15,10 +15,12 @@ from typing import Optional, Dict, Any, List
 import time
 import json
 
+import math
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from loguru import logger
 
 try:
@@ -86,6 +88,47 @@ class TrainingConfig:
         self.effective_batch_size = self.batch_size * self.gradient_accumulation_steps
 
 
+class EMAModel:
+    """
+    Exponential Moving Average of model weights.
+
+    Maintains a shadow copy of model parameters updated as:
+        shadow = decay * shadow + (1 - decay) * param
+
+    Use the shadow weights at validation/inference for better generalization.
+    Based on Polyak averaging (Polyak & Juditsky 1992) and used by
+    GraphCast, Pangu-Weather, and GenCast.
+    """
+
+    def __init__(self, model: nn.Module, decay: float = 0.999):
+        self.decay = decay
+        self.shadow = {name: param.clone().detach()
+                       for name, param in model.named_parameters() if param.requires_grad}
+        self.backup = {}
+
+    @torch.no_grad()
+    def update(self, model: nn.Module):
+        """Update shadow weights with current model parameters."""
+        for name, param in model.named_parameters():
+            if param.requires_grad and name in self.shadow:
+                self.shadow[name].mul_(self.decay).add_(param.data, alpha=1 - self.decay)
+
+    def apply_shadow(self, model: nn.Module):
+        """Replace model weights with shadow weights (for eval)."""
+        self.backup = {}
+        for name, param in model.named_parameters():
+            if name in self.shadow:
+                self.backup[name] = param.data.clone()
+                param.data.copy_(self.shadow[name])
+
+    def restore(self, model: nn.Module):
+        """Restore original model weights (after eval)."""
+        for name, param in model.named_parameters():
+            if name in self.backup:
+                param.data.copy_(self.backup[name])
+        self.backup = {}
+
+
 class LRScheduler:
     """
     Learning rate scheduler with warmup and cosine decay.
@@ -116,7 +159,7 @@ class LRScheduler:
             # Cosine decay
             progress = (self._step - self.warmup_steps) / (self.max_steps - self.warmup_steps)
             progress = min(1.0, progress)
-            factor = self.min_lr_ratio + 0.5 * (1 - self.min_lr_ratio) * (1 + torch.cos(torch.tensor(progress * 3.14159)).item())
+            factor = self.min_lr_ratio + 0.5 * (1 - self.min_lr_ratio) * (1 + torch.cos(torch.tensor(progress * math.pi)).item())
 
         for group, base_lr in zip(self.optimizer.param_groups, self.base_lrs):
             group["lr"] = base_lr * factor
@@ -190,8 +233,12 @@ class Trainer:
         )
 
         # Set up mixed precision
-        self.scaler = GradScaler() if config.use_amp else None
+        self.scaler = GradScaler('cuda') if config.use_amp else None
         self.amp_dtype = torch.float16 if config.amp_dtype == "float16" else torch.bfloat16
+
+        # EMA for better generalization (Polyak averaging)
+        self.ema = EMAModel(self.model, decay=0.999)
+        logger.info("Initialized EMA with decay=0.999")
 
         # Training state
         self.global_step = 0
@@ -275,7 +322,7 @@ class Trainer:
         forecast_len = self.get_current_forecast_length()
 
         # Forward pass with mixed precision
-        with autocast(enabled=self.config.use_amp, dtype=self.amp_dtype):
+        with autocast('cuda', enabled=self.config.use_amp, dtype=self.amp_dtype):
             # Forward pass
             outputs = self.model(
                 node_features=batch["node_features"],
@@ -326,17 +373,22 @@ class Trainer:
         else:
             self.optimizer.step()
 
-        self.optimizer.zero_grad()
+        self.optimizer.zero_grad(set_to_none=True)
         self.lr_scheduler.step()
+
+        # Update EMA weights after each optimizer step
+        self.ema.update(self.model)
 
         return grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm
 
     @torch.no_grad()
     def validate(self) -> Dict[str, float]:
-        """Run validation loop."""
+        """Run validation loop using EMA weights for better generalization."""
         if self.val_dataloader is None:
             return {}
 
+        # Use EMA shadow weights for validation
+        self.ema.apply_shadow(self.model)
         self.model.eval()
         total_losses = {}
         n_batches = 0
@@ -344,7 +396,7 @@ class Trainer:
         for batch in self.val_dataloader:
             batch = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
-            with autocast(enabled=self.config.use_amp, dtype=self.amp_dtype):
+            with autocast('cuda', enabled=self.config.use_amp, dtype=self.amp_dtype):
                 outputs = self.model(
                     node_features=batch["node_features"],
                     node_coords=batch["node_coords"],
@@ -364,6 +416,9 @@ class Trainer:
                 total_losses[k] = total_losses.get(k, 0.0) + val
 
             n_batches += 1
+
+        # Restore original model weights after validation
+        self.ema.restore(self.model)
 
         # Average losses
         avg_losses = {f"val_{k}": v / n_batches for k, v in total_losses.items()}

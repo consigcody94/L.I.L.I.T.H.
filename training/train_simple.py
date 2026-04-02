@@ -68,7 +68,7 @@ def train_epoch(
         Y = Y.to(device)
         meta = meta.to(device)
 
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
 
         # Mixed precision training
         with torch.amp.autocast('cuda'):
@@ -128,7 +128,13 @@ def validate(
     # MAE
     temp_mae = (preds[:, :, :2] - targets[:, :, :2]).abs().mean().item()
 
-    return total_loss / num_batches, temp_rmse, temp_mae
+    # Per-feature RMSE for proper denormalization (returned separately)
+    per_feature_rmse = []
+    for i in range(min(2, preds.shape[-1])):
+        feat_rmse = torch.sqrt(((preds[:, :, i] - targets[:, :, i]) ** 2).mean()).item()
+        per_feature_rmse.append(feat_rmse)
+
+    return total_loss / num_batches, temp_rmse, temp_mae, per_feature_rmse
 
 
 def main():
@@ -216,11 +222,12 @@ def main():
         Y = Y[subsample_idx]
         meta = meta[subsample_idx]
 
-    # Train/val split
+    # Train/val split (chronological to prevent temporal data leakage)
+    # Sequences are ordered by time; using random split would let the model
+    # see days adjacent to validation targets during training
     n_train = int(len(X) * 0.9)
-    indices = np.random.permutation(len(X))
-    train_idx = indices[:n_train]
-    val_idx = indices[n_train:]
+    train_idx = np.arange(n_train)
+    val_idx = np.arange(n_train, len(X))
 
     train_dataset = WeatherDataset(X[train_idx], Y[train_idx], meta[train_idx])
     val_dataset = WeatherDataset(X[val_idx], Y[val_idx], meta[val_idx])
@@ -266,9 +273,19 @@ def main():
     num_params = sum(p.numel() for p in model.parameters())
     logger.info(f"Model parameters: {num_params:,}")
 
-    # Optimizer and scheduler
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+    # Optimizer and scheduler (with warmup for transformer training stability)
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.05)
+    warmup_epochs = max(1, args.epochs // 10)  # 10% warmup
+    warmup_scheduler = optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=0.01, total_iters=warmup_epochs
+    )
+    cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=args.epochs - warmup_epochs
+    )
+    scheduler = optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[warmup_epochs]
+    )
     criterion = nn.MSELoss()
     scaler = torch.amp.GradScaler('cuda')
 
@@ -279,12 +296,13 @@ def main():
 
     for epoch in range(args.epochs):
         train_loss = train_epoch(model, train_loader, optimizer, criterion, device, scaler, epoch, args.epochs)
-        val_loss, val_rmse, val_mae = validate(model, val_loader, criterion, device)
+        val_loss, val_rmse, val_mae, per_feat_rmse = validate(model, val_loader, criterion, device)
         scheduler.step()
 
-        # Denormalize metrics for interpretable values
-        temp_rmse_denorm = val_rmse * Y_std[:2].mean()
-        temp_mae_denorm = val_mae * Y_std[:2].mean()
+        # Denormalize metrics per-feature then average (mathematically correct)
+        per_feat_rmse_denorm = [r * Y_std[i] for i, r in enumerate(per_feat_rmse)]
+        temp_rmse_denorm = np.mean(per_feat_rmse_denorm) if per_feat_rmse_denorm else val_rmse
+        temp_mae_denorm = val_mae * Y_std[:2].mean()  # MAE scales linearly, so mean std is acceptable
 
         logger.info(
             f"Epoch {epoch+1}/{args.epochs} | "

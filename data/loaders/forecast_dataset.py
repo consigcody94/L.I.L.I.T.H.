@@ -166,10 +166,12 @@ class ForecastDataset(Dataset):
         # Connect stations within spatial radius
         for i in range(n_stations):
             for j in range(i + 1, n_stations):
-                # Calculate distance
-                dlat = station_coords[i, 0] - station_coords[j, 0]
-                dlon = station_coords[i, 1] - station_coords[j, 1]
-                dist = np.sqrt(dlat**2 + dlon**2)
+                # Calculate distance using Haversine (correct for spherical geometry)
+                lat1, lat2 = np.radians(station_coords[i, 0]), np.radians(station_coords[j, 0])
+                dlat = lat2 - lat1
+                dlon = np.radians(station_coords[j, 1] - station_coords[i, 1])
+                a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
+                dist = np.degrees(2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a)))
 
                 if dist < self.spatial_radius:
                     # Bidirectional edges

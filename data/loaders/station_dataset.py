@@ -71,6 +71,8 @@ class StationDataset(Dataset):
         min_valid_ratio: float = 0.8,
         normalize: bool = True,
         cache_in_memory: bool = False,
+        augment: bool = False,
+        noise_std: float = 0.02,
     ):
         """
         Initialize the dataset.
@@ -95,6 +97,8 @@ class StationDataset(Dataset):
         self.min_valid_ratio = min_valid_ratio
         self.normalize = normalize
         self.cache_in_memory = cache_in_memory
+        self.augment = augment
+        self.noise_std = noise_std
 
         # Default variables
         self.target_variables = target_variables or ["TMAX", "TMIN", "PRCP"]
@@ -221,7 +225,7 @@ class StationDataset(Dataset):
 
         # Load data (may span two years)
         data = self._load_station_data(station_id, year)
-        if year + 1 <= 2023:  # Check for year boundary
+        if True:  # Load next year's data for sequences spanning year boundary
             next_year_data = self._load_station_data(station_id, year + 1)
             if not next_year_data.empty:
                 data = pd.concat([data, next_year_data])
@@ -259,6 +263,12 @@ class StationDataset(Dataset):
         # Fill NaN with 0 for tensor conversion (mask indicates valid values)
         input_features = np.nan_to_num(input_features, nan=0.0)
         target_features = np.nan_to_num(target_features, nan=0.0)
+
+        # Data augmentation: Gaussian noise injection on input features
+        # Regularizes against measurement noise (Wen et al. 2020)
+        if self.augment:
+            noise = np.random.randn(*input_features.shape).astype(np.float32) * self.noise_std
+            input_features = input_features + noise * input_mask[:, np.newaxis].astype(np.float32)
 
         # Station coordinates
         station_coords = np.array([
