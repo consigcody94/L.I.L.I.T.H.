@@ -235,6 +235,20 @@ The following improvements have been applied based on recent research in ML weat
 | **Optimized gradient zeroing** | `train_simple.py`, `trainer.py` | `set_to_none=True` avoids unnecessary memset, reducing memory footprint |
 | **Data augmentation** | `station_dataset.py` | Gaussian noise injection (std=0.02) on input features during training. Regularizes against measurement noise (Wen et al. 2020) |
 
+### Round 2: arXiv Research-Based Enhancements
+
+| Enhancement | Files | Research Basis |
+|:--|:--|:--|
+| **Physics consistency loss** | `losses.py` | NeuralGCM (Kochkov et al., Nature 2024). Penalizes TMAX &lt; TMIN inversions and negative precipitation. Enforces physical plausibility without hard constraints |
+| **Extreme value loss** | `losses.py` | FuXi-Extreme (Chen et al. 2024). Upweights MSE for events beyond 2&sigma; of climatological distribution. Critical for downstream applications (energy, agriculture) |
+| **Lead-time conditioning** | `lilith.py` | Stormer (Nguyen et al., ICML 2024). Adds a learned lead-time embedding to the forecast decoder. Reduces autoregressive error accumulation for days 60&ndash;90 by conditioning on target horizon |
+| **Tendency clamping** | `lilith.py` | NeuralGCM. Clamps predicted state tendencies to &plusmn;5.0, preventing runaway instabilities during long autoregressive rollouts |
+| **Cosine noise schedule** | `ensemble_head.py` | GenCast (Price et al., Nature 2024). Replaces linear beta schedule with cosine schedule (Nichol & Dhariwal 2021). Better distribution of noise levels, especially for low-noise timesteps critical for weather detail |
+| **Spectral energy conservation** | `losses.py` | NeuralGCM. Adds energy conservation penalty to spectral loss: penalizes total spectral energy mismatch between predictions and targets to prevent unphysical energy generation |
+| **Huber quantile loss** | `losses.py` | Distributional RL (Dabney et al. 2018). Combines quantile regression with Huber loss for robust tail calibration, less sensitive to outliers |
+| **Spectral loss enabled** | `losses.py` | GraphCast. Changed `spectral_weight` default from 0.0 to 0.05. The spectral loss was already implemented but disabled |
+| **Asymmetric diurnal curve** | `simple_forecaster.py` | Parton & Logan (1981). Improved hourly temperature interpolation with faster morning warming and exponential nighttime cooling, replacing symmetric sinusoid |
+
 <br/>
 
 ## Training
@@ -462,6 +476,11 @@ The ML model works without any API keys. OpenWeatherMap is only used as a fallba
 - **Ferro (2014)** &mdash; Fair CRPS for finite ensemble evaluation
 - **Gneiting & Raftery (2007)** &mdash; Energy Score for multivariate probabilistic forecasts
 - **Izmailov et al. (2018)** &mdash; EMA / Stochastic Weight Averaging for generalization
+- **GenCast** (Google DeepMind, 2024) &mdash; Diffusion-based ensemble forecasting, cosine noise schedules
+- **NeuralGCM** (Google, 2024) &mdash; Physics-informed constraints and tendency clamping
+- **Stormer** (Nguyen et al., ICML 2024) &mdash; Lead-time conditioned forecasting
+- **FuXi-Extreme** (Chen et al., 2024) &mdash; Extreme value loss weighting
+- **Dabney et al. (2018)** &mdash; Huber quantile loss from distributional RL
 - **IAU 2006** &mdash; Obliquity of the ecliptic (23.4393&deg;) for solar declination
 
 ### Data Providers

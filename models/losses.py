@@ -458,7 +458,159 @@ class SpectralLoss(nn.Module):
 
         diff = diff * freq_weight
 
-        return diff.mean()
+        magnitude_loss = diff.mean()
+
+        # Spectral energy conservation (NeuralGCM-inspired)
+        # Penalize total spectral energy mismatch to prevent unphysical
+        # energy generation or dissipation
+        pred_energy = (pred_mag ** 2).sum()
+        target_energy = (target_mag ** 2).sum()
+        energy_loss = (pred_energy - target_energy).abs() / (target_energy + 1e-8)
+
+        return magnitude_loss + 0.1 * energy_loss
+
+
+class ExtremeValueLoss(nn.Module):
+    """
+    Upweights loss for extreme weather events (FuXi-Extreme, Chen et al. 2024).
+
+    Extreme events (beyond 2 std from climatological mean) are critical for
+    downstream applications but underrepresented in training data. This loss
+    applies higher weight to samples in the tails of the distribution.
+    """
+
+    def __init__(self, threshold_std: float = 2.0):
+        super().__init__()
+        self.threshold_std = threshold_std
+
+    def forward(
+        self,
+        pred: torch.Tensor,
+        target: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Compute extreme-value-weighted MSE.
+
+        Args:
+            pred: Predictions
+            target: Targets
+            mask: Valid value mask
+
+        Returns:
+            Scalar loss focused on extreme events
+        """
+        sq_errors = (pred - target) ** 2
+
+        # Identify extreme events (beyond threshold_std from batch statistics)
+        target_mean = target.mean(dim=0, keepdim=True)
+        target_std = target.std(dim=0, keepdim=True).clamp(min=1e-4)
+        is_extreme = (target - target_mean).abs() > self.threshold_std * target_std
+
+        if mask is not None:
+            is_extreme = is_extreme & mask
+
+        n_extreme = is_extreme.sum()
+        if n_extreme > 0:
+            return (sq_errors * is_extreme.float()).sum() / n_extreme
+        else:
+            return torch.tensor(0.0, device=pred.device)
+
+
+class PhysicsConsistencyLoss(nn.Module):
+    """
+    Enforces physical constraints on predictions (NeuralGCM-inspired).
+
+    Penalizes physically impossible states:
+    - TMAX < TMIN (temperature inversion)
+    - Negative precipitation
+    """
+
+    def forward(
+        self,
+        pred: torch.Tensor,
+        var_names: Optional[list] = None,
+    ) -> torch.Tensor:
+        """
+        Compute physics consistency penalty.
+
+        Args:
+            pred: Predictions (batch, ..., n_vars)
+            var_names: Variable names to identify TMAX/TMIN/PRCP columns
+
+        Returns:
+            Scalar penalty
+        """
+        if var_names is None:
+            var_names = ["TMAX", "TMIN", "PRCP"]
+
+        penalty = torch.tensor(0.0, device=pred.device)
+
+        # TMAX must be >= TMIN
+        tmax_idx = [i for i, n in enumerate(var_names) if n in ("TMAX", "temp_max")]
+        tmin_idx = [i for i, n in enumerate(var_names) if n in ("TMIN", "temp_min")]
+        if tmax_idx and tmin_idx:
+            tmax = pred[..., tmax_idx[0]]
+            tmin = pred[..., tmin_idx[0]]
+            # Penalize when TMIN > TMAX
+            penalty = penalty + F.relu(tmin - tmax).mean()
+
+        # Precipitation must be >= 0
+        prcp_idx = [i for i, n in enumerate(var_names) if "prcp" in n.lower() or "PRCP" in n]
+        if prcp_idx:
+            prcp = pred[..., prcp_idx[0]]
+            penalty = penalty + F.relu(-prcp).mean()
+
+        return penalty
+
+
+class HuberQuantileLoss(nn.Module):
+    """
+    Huber (pinball) quantile loss for robust tail calibration.
+
+    Combines quantile regression with Huber loss to be less sensitive
+    to outliers while maintaining proper quantile calibration.
+    Used in distributional RL (Dabney et al. 2018) and adapted for weather.
+    """
+
+    def __init__(
+        self,
+        quantiles: Tuple[float, ...] = (0.05, 0.25, 0.5, 0.75, 0.95),
+        kappa: float = 1.0,
+    ):
+        super().__init__()
+        self.quantiles = quantiles
+        self.kappa = kappa
+
+    def forward(
+        self,
+        pred: torch.Tensor,
+        target: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Args:
+            pred: Quantile predictions (batch, ..., n_quantiles)
+            target: Target values (batch, ...)
+            mask: Valid value mask
+        """
+        target = target.unsqueeze(-1)  # (batch, ..., 1)
+        errors = target - pred  # (batch, ..., n_quantiles)
+
+        loss = torch.tensor(0.0, device=pred.device)
+        for i, q in enumerate(self.quantiles):
+            e = errors[..., i]
+            # Huber loss component
+            huber = torch.where(
+                e.abs() <= self.kappa,
+                0.5 * e ** 2,
+                self.kappa * (e.abs() - 0.5 * self.kappa),
+            )
+            # Quantile weighting
+            quantile_weight = torch.where(e >= 0, q, 1 - q)
+            loss = loss + (quantile_weight * huber).mean()
+
+        return loss / len(self.quantiles)
 
 
 class LILITHLoss(nn.Module):
@@ -469,6 +621,8 @@ class LILITHLoss(nn.Module):
     - Temperature MSE
     - Precipitation occurrence + amount
     - Gradient consistency
+    - Physics consistency (NeuralGCM-inspired)
+    - Extreme value upweighting (FuXi-Extreme)
     - Optional: Spectral loss, CRPS
     """
 
@@ -477,8 +631,10 @@ class LILITHLoss(nn.Module):
         temp_weight: float = 1.0,
         precip_weight: float = 2.0,
         gradient_weight: float = 0.1,
-        spectral_weight: float = 0.0,
+        spectral_weight: float = 0.05,
         uncertainty_weight: float = 0.1,
+        physics_weight: float = 0.5,
+        extreme_weight: float = 0.2,
         var_weights: Optional[Dict[str, float]] = None,
     ):
         """
@@ -499,12 +655,16 @@ class LILITHLoss(nn.Module):
         self.gradient_weight = gradient_weight
         self.spectral_weight = spectral_weight
         self.uncertainty_weight = uncertainty_weight
+        self.physics_weight = physics_weight
+        self.extreme_weight = extreme_weight
 
         # Component losses
         self.mse_loss = WeightedMSELoss(var_weights)
         self.gradient_loss = GradientConsistencyLoss()
         self.precip_loss = PrecipitationLoss()
         self.nll_loss = GaussianNLLLoss()
+        self.physics_loss = PhysicsConsistencyLoss()
+        self.extreme_loss = ExtremeValueLoss()
 
         if spectral_weight > 0:
             self.spectral_loss = SpectralLoss()
@@ -573,6 +733,14 @@ class LILITHLoss(nn.Module):
         if pred_std is not None and self.uncertainty_weight > 0:
             losses["nll"] = self.nll_loss(pred, pred_std, target, mask)
 
+        # Physics consistency (NeuralGCM-inspired: TMAX >= TMIN, PRCP >= 0)
+        if self.physics_weight > 0:
+            losses["physics"] = self.physics_loss(pred, var_names)
+
+        # Extreme value loss (FuXi-Extreme: upweight rare events)
+        if self.extreme_weight > 0:
+            losses["extreme"] = self.extreme_loss(pred, target, mask)
+
         # Compute total loss
         total = 0.0
         if "temp_mse" in losses:
@@ -583,6 +751,10 @@ class LILITHLoss(nn.Module):
             total = total + self.gradient_weight * losses["gradient"]
         if "nll" in losses:
             total = total + self.uncertainty_weight * losses["nll"]
+        if "physics" in losses:
+            total = total + self.physics_weight * losses["physics"]
+        if "extreme" in losses:
+            total = total + self.extreme_weight * losses["extreme"]
 
         losses["total"] = total
 

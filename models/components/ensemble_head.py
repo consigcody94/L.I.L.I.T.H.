@@ -280,8 +280,14 @@ class DiffusionEnsembleHead(nn.Module):
         self.output_dim = output_dim
         self.n_steps = n_steps
 
-        # Noise schedule
-        betas = torch.linspace(beta_start, beta_end, n_steps)
+        # Cosine noise schedule (Nichol & Dhariwal 2021, used in GenCast)
+        # Better distribution of noise levels than linear schedule,
+        # especially for low-noise timesteps critical for weather detail
+        s = 0.008  # Small offset to prevent singularity at t=0
+        steps = torch.arange(n_steps + 1, dtype=torch.float64)
+        alpha_bar = torch.cos(((steps / n_steps) + s) / (1 + s) * math.pi * 0.5) ** 2
+        alpha_bar = alpha_bar / alpha_bar[0]  # Normalize so alpha_bar[0] = 1
+        betas = torch.clamp(1 - (alpha_bar[1:] / alpha_bar[:-1]), max=0.999).float()
         alphas = 1 - betas
         alphas_cumprod = torch.cumprod(alphas, dim=0)
 

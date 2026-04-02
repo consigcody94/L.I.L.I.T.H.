@@ -268,13 +268,21 @@ class ForecastDecoder(nn.Module):
         self.output_dim = output_dim
         self.forecast_length = forecast_length
 
-        # Step predictor (one step at a time)
+        # Lead-time embedding (Stormer, Nguyen et al. 2023)
+        # Conditions the model on the target forecast horizon,
+        # reducing autoregressive error accumulation for long-range forecasts
+        self.lead_time_embed = nn.Embedding(forecast_length, hidden_dim)
+
+        # Step predictor with tendency clamping (NeuralGCM-inspired)
         self.step_predictor = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim),
         )
+
+        # Maximum tendency magnitude (prevents runaway predictions)
+        self.max_tendency = 5.0
 
         # Output projection
         self.output_proj = nn.Linear(hidden_dim, output_dim)
@@ -316,14 +324,20 @@ class ForecastDecoder(nn.Module):
         # Initialize output
         outputs = []
 
-        # Autoregressive rollout
+        # Autoregressive rollout with lead-time conditioning (Stormer)
+        # and tendency clamping (NeuralGCM)
         state = latent
-        for t in range(n_steps):
-            # Add positional info
-            step_input = state + pos_enc[:, t:t+1, :]
+        lead_times = torch.arange(n_steps, device=latent.device)
+        lead_emb = self.lead_time_embed(lead_times)  # (n_steps, hidden_dim)
 
-            # Predict next state
-            state = state + self.step_predictor(step_input)
+        for t in range(n_steps):
+            # Add positional info and lead-time conditioning
+            step_input = state + pos_enc[:, t:t+1, :] + lead_emb[t:t+1, :].unsqueeze(0)
+
+            # Predict tendency and clamp magnitude (prevents runaway instability)
+            tendency = self.step_predictor(step_input)
+            tendency = torch.clamp(tendency, -self.max_tendency, self.max_tendency)
+            state = state + tendency
 
             # Project to output
             output = self.output_proj(state)
