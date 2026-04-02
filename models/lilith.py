@@ -154,12 +154,14 @@ class StationToGrid(nn.Module):
         station_lon = station_coords[:, :, 1]
 
         # Compute distances from each station to each grid point
-        # Using approximate great-circle distance
+        # Using Haversine-corrected distance for proper spherical geometry
         dlat = station_lat.unsqueeze(2) - self.lat_grid.unsqueeze(0).unsqueeze(0)
         dlon = station_lon.unsqueeze(2) - self.lon_grid.unsqueeze(0).unsqueeze(0)
 
-        # Approximate distance in degrees
-        dist = torch.sqrt(dlat**2 + dlon**2 + 1e-6)
+        # Apply cosine-latitude correction to longitude distances
+        mean_lat_rad = torch.deg2rad((station_lat.unsqueeze(2) + self.lat_grid.unsqueeze(0).unsqueeze(0)) / 2)
+        dlon_corrected = dlon * torch.cos(mean_lat_rad)
+        dist = torch.sqrt(dlat**2 + dlon_corrected**2 + 1e-6)
 
         # Stack distance features
         dist_features = torch.stack([dist, dlat, dlon], dim=-1)
