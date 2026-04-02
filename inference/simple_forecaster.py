@@ -149,7 +149,7 @@ class SimpleForecaster:
         else:
             phase_shift = 15
 
-        seasonal_offset = seasonal_amp * np.cos(2 * np.pi * (day_of_year - phase_shift) / 365)
+        seasonal_offset = seasonal_amp * np.cos(2 * np.pi * (day_of_year - phase_shift) / 365.25)
         current_mean = annual_mean + seasonal_offset
 
         return {
@@ -223,7 +223,7 @@ class SimpleForecaster:
         else:  # Southern hemisphere
             phase_shift = 15
 
-        seasonal_offset = seasonal_amplitude * np.cos(2 * np.pi * (day_of_year - phase_shift) / 365)
+        seasonal_offset = seasonal_amplitude * np.cos(2 * np.pi * (day_of_year - phase_shift) / 365.25)
         current_mean = annual_mean + seasonal_offset
 
         # Diurnal range (difference between high and low)
@@ -274,7 +274,7 @@ class SimpleForecaster:
         x_norm = self._normalize_input(history)
 
         # Create metadata: [lat, lon, elevation, day_of_year]
-        day_of_year = datetime.now().timetuple().tm_yday / 365.0
+        day_of_year = datetime.now().timetuple().tm_yday / 365.25
         meta = np.array([
             latitude / 90.0,  # Normalize lat
             longitude / 180.0,  # Normalize lon
@@ -382,12 +382,18 @@ class SimpleForecaster:
             t_high = day_data['temperature_high']
             t_low = day_data['temperature_low']
 
-            # Simple sinusoidal interpolation
+            # Asymmetric sinusoidal interpolation (Parton & Logan 1981)
+            # Morning warming is faster than evening cooling
             temp_range = t_high - t_low
-            temp_mid = (t_high + t_low) / 2
-            # Peak at 15:00 (3pm), trough at 6:00 (6am)
-            phase = (hour_of_day - 15) * np.pi / 12
-            temp = temp_mid + (temp_range / 2) * np.cos(phase)
+            if 6 <= hour_of_day <= 15:
+                # Daytime warming: sinusoidal from Tmin at 6am to Tmax at 3pm
+                phase = np.pi * (hour_of_day - 6) / 9.0  # 0 to pi over 9 hours
+                temp = t_low + temp_range * (1 - np.cos(phase)) / 2
+            else:
+                # Nighttime cooling: exponential decay from Tmax toward next Tmin
+                hours_since_peak = (hour_of_day - 15) % 24
+                decay_hours = 15.0  # 3pm to 6am = 15 hours
+                temp = t_low + temp_range * np.exp(-2.2 * hours_since_peak / decay_hours)
 
             hourly.append({
                 "time": hour_time.isoformat(),
