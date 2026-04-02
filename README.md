@@ -201,6 +201,42 @@ L.I.L.I.T.H. uses a **Station-Graph Temporal Transformer (SGTT)** architecture:
 
 <br/>
 
+## Research & Mathematical Improvements
+
+The following improvements have been applied based on recent research in ML weather forecasting and numerical best practices.
+
+### Correctness Fixes
+
+| Fix | Files | Details |
+|:--|:--|:--|
+| **Solar declination constant** | `climate_embed.py` | Updated from 23.45&deg; to **23.4393&deg;** (IAU 2006 obliquity at J2000.0 epoch) |
+| **Haversine distance** | `pipeline.py`, `forecast_dataset.py` | Replaced Euclidean lat/lon distance with **Haversine formula**. Euclidean distance overweights longitude at high latitudes by up to 2&times; (1&deg; lon at 60&deg;N = 55 km, not 111 km) |
+| **Temporal data leakage** | `train_simple.py` | Changed from random permutation split to **chronological split**. Random splitting of time series allows the model to see days adjacent to validation targets during training, producing optimistically biased error estimates |
+| **RMSE denormalization** | `train_simple.py` | Fixed per-feature denormalization. Previous code multiplied aggregate RMSE by mean std, which is mathematically incorrect when features have different standard deviations |
+| **Spike detection thresholds** | `quality_control.py` | Variable-specific minimum std (1.0&deg;C for temperature, 0.5 for precip/pressure). Previous 0.1 threshold flagged normal &lt;0.5&deg;C variation during stable weather |
+| **Day-of-year encoding** | `pipeline.py`, `station_embed.py` | Changed divisor from 365 to **365.25** (mean tropical year), ensuring consistent Dec 31 encoding across leap/non-leap years |
+| **Pi constant** | `trainer.py` | Replaced hardcoded `3.14159` with `math.pi` in cosine LR schedule |
+| **Month cycle constant** | `station_embed.py` | Changed from 30.0 to **30.4375** (365.25/12) for accurate month-length encoding |
+| **Pressure QC bounds** | `quality_control.py` | Widened lower bound from 870 to **850 hPa** for operational tolerance at high-altitude stations |
+| **Hardcoded year limit** | `station_dataset.py` | Removed `year + 1 <= 2023` check that silently broke for data collected after 2023 |
+
+### Research-Based Enhancements
+
+| Enhancement | Files | Research Basis |
+|:--|:--|:--|
+| **EMA (Exponential Moving Average)** | `trainer.py` | Polyak & Juditsky (1992), Izmailov et al. (2018). Maintains shadow weights updated as `shadow = 0.999 * shadow + 0.001 * param`. Used by GraphCast, Pangu-Weather, GenCast. Expected 2&ndash;5% validation error reduction at zero extra training cost |
+| **Fair CRPS** | `losses.py` | Ferro (2014). Corrects finite-ensemble bias in CRPS by multiplying the spread term by `n/(n-1)`. Without this correction, small ensembles systematically underestimate spread |
+| **Energy Score** | `losses.py` | Gneiting & Raftery (2007). Multivariate generalization of CRPS: `ES = E[||X-y||] - 0.5*E[||X-X'||]`. Evaluates calibration across all forecast variables jointly, unlike univariate CRPS |
+| **LR warmup** | `train_simple.py` | Vaswani et al. (2017). Added linear warmup (10% of epochs) followed by cosine decay. Prevents early gradient instability in transformer attention weight initialization |
+| **Xavier spectral initialization** | `sfno.py` | Changed SpectralConv2d weight scale from `1/(in*out)` to `1/sqrt(in*out)` for proper variance preservation in the Fourier domain |
+| **Weight decay 0.05** | `config.py`, `train_simple.py` | Aligned with Pangu-Weather (0.05) and Chinchilla (0.1). The previous 0.01 was too low for medium transformers, providing insufficient regularization |
+| **Curriculum stages** | `config.py` | Reconciled inconsistent stages `[7,14,42,90]` to `[7,14,30,60,90]`. The 14&rarr;42 day jump (3&times;) caused training instability; intermediate steps ensure smoother difficulty transitions |
+| **Modern AMP API** | `trainer.py` | Migrated from deprecated `torch.cuda.amp` to `torch.amp` (PyTorch 2.1+) with explicit device type |
+| **Optimized gradient zeroing** | `train_simple.py`, `trainer.py` | `set_to_none=True` avoids unnecessary memset, reducing memory footprint |
+| **Data augmentation** | `station_dataset.py` | Gaussian noise injection (std=0.02) on input features during training. Regularizes against measurement noise (Wen et al. 2020) |
+
+<br/>
+
 ## Training
 
 ### Pre-trained Model
@@ -422,6 +458,11 @@ The ML model works without any API keys. OpenWeatherMap is only used as a fallba
 - **Pangu-Weather** (Huawei) &mdash; Transformer architectures for weather
 - **FourCastNet** (NVIDIA) &mdash; Fourier neural operators for atmospheric modeling
 - **FuXi** (Fudan University) &mdash; Subseasonal forecasting advances
+- **Brody et al. (2021)** &mdash; GATv2: How Attentive are Graph Attention Networks?
+- **Ferro (2014)** &mdash; Fair CRPS for finite ensemble evaluation
+- **Gneiting & Raftery (2007)** &mdash; Energy Score for multivariate probabilistic forecasts
+- **Izmailov et al. (2018)** &mdash; EMA / Stochastic Weight Averaging for generalization
+- **IAU 2006** &mdash; Obliquity of the ecliptic (23.4393&deg;) for solar declination
 
 ### Data Providers
 
