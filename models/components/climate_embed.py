@@ -219,7 +219,7 @@ class SolarPositionEmbedding(nn.Module):
 
         # Solar declination (degrees)
         declination = 23.45 * torch.sin(
-            torch.deg2rad(torch.tensor(360 / 365.25 * (day_of_year - 81)))
+            torch.deg2rad(360 / 365.25 * (day_of_year - 81))
         )
 
         # Convert to radians
