@@ -97,15 +97,25 @@ class SynopticDownloader:
         if not stations:
             return pd.DataFrame()
 
-        # Flatten the most useful fields.
+        # Flatten the most useful fields. The ``or "nan"`` idiom is wrong for
+        # numeric 0 (an equator/Greenwich station would be coerced to NaN), so
+        # we explicitly check for None and empty strings instead.
+        def _to_float(v) -> float:
+            if v is None or v == "":
+                return float("nan")
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return float("nan")
+
         rows = []
         for s in stations:
             rows.append({
                 "stid": s.get("STID"),
                 "name": s.get("NAME"),
-                "latitude": float(s.get("LATITUDE", "nan") or "nan"),
-                "longitude": float(s.get("LONGITUDE", "nan") or "nan"),
-                "elevation": float(s.get("ELEVATION", "nan") or "nan"),
+                "latitude": _to_float(s.get("LATITUDE")),
+                "longitude": _to_float(s.get("LONGITUDE")),
+                "elevation": _to_float(s.get("ELEVATION")),
                 "state": s.get("STATE"),
                 "network": (s.get("MNET") or {}).get("SHORTNAME"),
                 "period_start": (s.get("PERIOD_OF_RECORD") or {}).get("start"),
@@ -184,9 +194,17 @@ class SynopticDownloader:
             df[clean] = pd.to_numeric(values, errors="coerce")
 
         df["stid"] = station_block.get("STID")
-        df["latitude"] = float(station_block.get("LATITUDE", "nan") or "nan")
-        df["longitude"] = float(station_block.get("LONGITUDE", "nan") or "nan")
-        df["elevation"] = float(station_block.get("ELEVATION", "nan") or "nan")
+        # See _to_float in metadata() for why we don't use ``or "nan"`` here.
+        def _to_float(v) -> float:
+            if v is None or v == "":
+                return float("nan")
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return float("nan")
+        df["latitude"] = _to_float(station_block.get("LATITUDE"))
+        df["longitude"] = _to_float(station_block.get("LONGITUDE"))
+        df["elevation"] = _to_float(station_block.get("ELEVATION"))
         return df
 
     def latest(self, bbox: List[float], variables: str = DEFAULT_VARS) -> pd.DataFrame:

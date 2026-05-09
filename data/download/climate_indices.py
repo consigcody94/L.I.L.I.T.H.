@@ -46,10 +46,15 @@ class IndexSource:
 
 
 def _parse_oni(text: str) -> pd.DataFrame:
-    """ONI from CPC: 'SEAS YR TOTAL ANOM' columns, where SEAS is e.g. 'DJF'.
+    """ONI from CPC: 'SEAS YR TOTAL ANOM' columns where SEAS is e.g. 'DJF'.
 
-    We expand each rolling-3-month season to a monthly date pinned at the
-    *center* month so it lines up with daily forecasts naturally.
+    CPC's convention is that YR labels the *last* month of the rolling
+    3-month season. So 'DJF 2020' = Dec 2019, Jan 2020, Feb 2020 — center
+    month is January 2020 (the listed year, not year-1). Likewise 'NDJ
+    2019' = Nov/Dec 2019 + Jan 2020, centered on December 2019.
+
+    We pin each season to its center month so monthly forecasts line up
+    with daily series naturally.
     """
     seas_to_month = {
         "DJF": 1, "JFM": 2, "FMA": 3, "MAM": 4, "AMJ": 5, "MJJ": 6,
@@ -66,10 +71,6 @@ def _parse_oni(text: str) -> pd.DataFrame:
         except ValueError:
             continue
         month = seas_to_month[parts[0]]
-        # NDJ wraps year boundary — center month is December of the listed year.
-        if parts[0] == "DJF":
-            year -= 1
-            month = 1  # center is January next year actually, keep simple
         rows.append({"date": pd.Timestamp(year=year, month=month, day=15), "oni": anom})
     df = pd.DataFrame(rows).drop_duplicates("date").sort_values("date").reset_index(drop=True)
     return df

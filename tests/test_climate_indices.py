@@ -31,6 +31,25 @@ class TestParsers:
         assert {"date", "oni"}.issubset(df.columns)
         assert df["oni"].iloc[0] == pytest.approx(0.5)
 
+    def test_oni_djf_pinned_to_january_of_listed_year(self):
+        """CPC labels DJF by the YR of February (the last month of the
+        season). Center month is January of the same year — NOT year-1."""
+        df = _parse_oni("DJF 2020 26.6 0.5\n")
+        assert len(df) == 1
+        # Expected: January 15, 2020 (center of Dec 2019 / Jan 2020 / Feb 2020).
+        assert df["date"].iloc[0] == pd.Timestamp("2020-01-15")
+
+    def test_oni_ndj_pinned_to_december(self):
+        """NDJ 2019 = Nov/Dec 2019 + Jan 2020, centered on December 2019."""
+        df = _parse_oni("NDJ 2019 26.6 0.5\n")
+        assert len(df) == 1
+        assert df["date"].iloc[0] == pd.Timestamp("2019-12-15")
+
+    def test_oni_jja_centers_on_july(self):
+        """Sanity check the simple seasons."""
+        df = _parse_oni("JJA 2020 28.0 0.3\n")
+        assert df["date"].iloc[0] == pd.Timestamp("2020-07-15")
+
     def test_oni_skips_invalid_year(self):
         text = "JFM ABCD 26.7 0.4\nFMA 2020 27.0 0.4\n"
         df = _parse_oni(text)

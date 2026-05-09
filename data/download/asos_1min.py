@@ -195,16 +195,20 @@ class ASOS1MinDownloader:
                 continue
 
             station = path.parent.name
-            df["station"] = station
-            df = df.set_index("timestamp")
-
-            numeric = df.select_dtypes(include=[np.number]).columns.tolist()
+            df_indexed = df.set_index("timestamp")
+            numeric = df_indexed.select_dtypes(include=[np.number]).columns.tolist()
             if not numeric:
                 continue
 
-            agg = df.groupby("station")[numeric].resample("1h").agg(["mean", "max", "min"])
-            agg.columns = [f"{c}_{stat}" for c, stat in agg.columns]
+            # Per-station resample. Doing the groupby+resample at once produces
+            # a 3-level column MultiIndex on pandas 3.x (groupby_key, agg_func,
+            # base_column) which breaks the simple 2-tuple unpack — cleaner to
+            # resample one station at a time and append the station tag after.
+            agg = df_indexed[numeric].resample("1h").agg(["mean", "max", "min"])
+            # 2-level MultiIndex now: (base_column, agg_func)
+            agg.columns = [f"{base}_{stat}" for base, stat in agg.columns]
             agg = agg.reset_index()
+            agg["station"] = station
             frames.append(agg)
 
         if not frames:

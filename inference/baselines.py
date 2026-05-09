@@ -20,7 +20,7 @@ References:
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -143,8 +143,13 @@ def evaluate_baselines(
     lats = meta_val[:, 0] * 90.0
     lons = meta_val[:, 1] * 180.0
     for i in range(n):
+        # datetime.utcfromtimestamp is deprecated in Python 3.12+; use the
+        # timezone-aware form. datetime64 -> int seconds -> aware datetime -> date.
         start = (
-            datetime.utcfromtimestamp(dates_val[i].astype("datetime64[s]").astype(int)).date()
+            datetime.fromtimestamp(
+                int(dates_val[i].astype("datetime64[s]").astype(int)),
+                tz=timezone.utc,
+            ).date()
             if dates_val is not None
             else None
         )

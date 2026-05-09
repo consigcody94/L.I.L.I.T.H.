@@ -372,11 +372,16 @@ def evaluate(
             history=hist,
             elevation=float(meta[val_idx[i], 2]),
         )
-        # Pull TMAX/TMIN out of the structured response
+        # Pull TMAX/TMIN out of the structured response. If the checkpoint
+        # was trained for a shorter horizon than Y.shape[1] (e.g. ckpt
+        # max_forecast=14 but Y has 90-day targets), SimpleForecaster
+        # returns only N days — slice truth to match so the comparison
+        # broadcasts cleanly.
         tmax = np.array([f["temperature_high"] for f in out["forecasts"]])
         tmin = np.array([f["temperature_low"] for f in out["forecasts"]])
-        truth = Y[val_idx[i], :, :2]
-        pred = np.stack([tmax, tmin], axis=-1)[:truth.shape[0]]
+        n_pred = len(tmax)
+        truth = Y[val_idx[i], :n_pred, :2]
+        pred = np.stack([tmax, tmin], axis=-1)
         sq += float(((pred - truth) ** 2).sum())
         n_elem += pred.size
 

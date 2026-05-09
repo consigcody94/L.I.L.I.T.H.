@@ -117,3 +117,53 @@ class TestHourlyProcessor:
         proc = HourlyProcessor(synthetic_hourly_parquet)
         assert proc.feature_names == [name for name, *_ in DAILY_FEATURE_MAP]
         assert len(proc.feature_names) == 12
+
+
+class TestAsosAggregatorIntegration:
+    """End-to-end pipeline test: raw 1-min CSV -> ASOS aggregator -> HourlyProcessor.
+
+    Catches the kind of bug we shipped in round 1: the aggregator produced a
+    3-level MultiIndex on modern pandas, which broke the unpack into ``base``
+    and ``stat``. Without this test the failure mode is a runtime error the
+    first time anyone actually runs ``lilith download asos-1min``.
+    """
+
+    def test_aggregator_produces_columns_processor_consumes(self, tmp_path):
+        from data.download.asos_1min import ASOS1MinDownloader
+
+        # Simulate one station-month of NCEI v1 1-min CSVs.
+        rows = []
+        for h in range(24):
+            for m in range(60):
+                ts = pd.Timestamp(f"2024-01-01 {h:02d}:{m:02d}:00")
+                rows.append({
+                    "timestamp": ts,
+                    "tmpc": 10.0 + h * 0.1,
+                    "dwpc": 5.0,
+                    "relh": 50.0,
+                    "sknt": 5.0,
+                    "gust": 8.0,
+                    "mslp": 1013.0,
+                    "p01i": 0.0,
+                })
+        station_dir = tmp_path / "KORD"
+        station_dir.mkdir()
+        csv = station_dir / "2024-01.csv"
+        pd.DataFrame(rows).to_csv(csv, index=False)
+
+        out_pq = tmp_path / "hourly.parquet"
+        agg_df = ASOS1MinDownloader(tmp_path).aggregate_to_hourly([csv], output=out_pq)
+
+        # Aggregator must produce the columns HourlyProcessor reads from.
+        required = {"tmpc_mean", "tmpc_max", "tmpc_min", "gust_max",
+                    "mslp_min", "p01i_mean", "p01i_max", "relh_min",
+                    "sknt_mean", "station", "timestamp"}
+        missing = required - set(agg_df.columns)
+        assert not missing, f"Aggregator missing required columns: {missing}"
+
+        # Pipeline through the processor should yield 12 daily features.
+        proc = HourlyProcessor(out_pq)
+        daily = proc.to_daily_features()
+        for name, *_ in DAILY_FEATURE_MAP:
+            assert name in daily.columns, f"daily missing {name}"
+        assert len(daily) == 1  # one day of synthetic data
