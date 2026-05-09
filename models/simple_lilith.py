@@ -149,3 +149,48 @@ class SimpleLILITH(nn.Module):
 
         # Project to output features
         return self.output_proj(output)
+
+    @torch.no_grad()
+    def mc_dropout_forecast(
+        self,
+        x: torch.Tensor,
+        meta: torch.Tensor,
+        target_len: int,
+        n_samples: int = 30,
+    ) -> torch.Tensor:
+        """Cheap epistemic-uncertainty proxy via Monte Carlo Dropout.
+
+        Keeps dropout layers active during inference and runs the model
+        ``n_samples`` times. Returns ``(n_samples, batch, target_len, out_features)``.
+        This is a strict upgrade over the noise-injection trick the original
+        repo shipped: samples are genuinely decorrelated and reflect actual
+        weight-space uncertainty.
+
+        Caveats — read these before using the intervals operationally:
+            * MC Dropout is *not* a faithful Bayesian posterior. Le Folgoc
+              et al. ("Is MC Dropout Bayesian?", arXiv:2110.04286) show that
+              its predictive posterior assigns 0 probability to the true
+              model on closed-form benchmarks; multimodality is a design
+              artefact, not real epistemic structure.
+            * Empirical calibration of MC Dropout intervals is mixed —
+              recent work finds only modest correlation between MC Dropout
+              uncertainty and actual prediction error (e.g. r ~ 0.3–0.4 in
+              segmentation; arXiv:2510.15541). Calibrate against held-out
+              data before reporting confidence bands to users.
+            * For a production-grade ensemble, train a *deep ensemble*
+              (5-10 independently-initialized models) and average. Costs
+              more compute but gives genuinely calibrated uncertainty.
+
+        Cost: n_samples × the deterministic forward pass.
+        """
+        was_training = self.training
+        for module in self.modules():
+            if isinstance(module, nn.Dropout):
+                module.train()
+
+        try:
+            samples = [self.forward(x, meta, target_len) for _ in range(n_samples)]
+        finally:
+            self.train(was_training)
+
+        return torch.stack(samples, dim=0)

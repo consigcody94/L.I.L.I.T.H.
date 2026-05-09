@@ -31,8 +31,8 @@ class ForecastRequest(BaseModel):
         description="Variables to forecast",
     )
 
-    class Config:
-        json_schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "latitude": 40.7128,
                 "longitude": -74.0060,
@@ -40,6 +40,7 @@ class ForecastRequest(BaseModel):
                 "include_uncertainty": True,
             }
         }
+    }
 
 
 class DailyForecast(BaseModel):
@@ -67,8 +68,8 @@ class ForecastResponse(BaseModel):
     forecast_days: int = Field(..., description="Number of forecast days")
     forecasts: List[DailyForecast] = Field(..., description="Daily forecasts")
 
-    class Config:
-        json_schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "location": {"latitude": 40.7128, "longitude": -74.0060},
                 "generated_at": "2024-01-15T12:00:00Z",
@@ -85,6 +86,7 @@ class ForecastResponse(BaseModel):
                 ],
             }
         }
+    }
 
 
 class BatchForecastRequest(BaseModel):

@@ -170,29 +170,34 @@ class GHCNProcessor:
         self,
         df: pd.DataFrame,
         input_days: int = 30,
-        target_days: int = 14,
-        stride: int = 7
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        target_days: int = 90,
+        stride: int = 7,
+        features: Optional[List[str]] = None,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Create training sequences for the model.
 
         Args:
             df: DataFrame with processed weather data
             input_days: Number of days of history to use as input
-            target_days: Number of days to predict
+            target_days: Number of days to predict (default 90 to match model horizon)
             stride: Step size between sequences
+            features: List of feature columns to use (default ['TMAX','TMIN','PRCP'])
 
         Returns:
             X: Input sequences [N, input_days, features]
             Y: Target sequences [N, target_days, features]
             meta: Station metadata [N, 4] (lat, lon, elev, day_of_year)
+            dates: Forecast start date as np.datetime64[D] [N] — first day of Y window.
+                   Use this for chronological train/val splitting to avoid leakage.
         """
         sequences_X = []
         sequences_Y = []
         sequences_meta = []
+        sequences_dates = []
 
-        # Features we'll use
-        features = ['TMAX', 'TMIN', 'PRCP']
+        if features is None:
+            features = ['TMAX', 'TMIN', 'PRCP']
 
         # Process each station separately
         stations = df['station_id'].unique()
@@ -211,7 +216,7 @@ class GHCNProcessor:
             station_df[features] = station_df[features].interpolate(method='linear', limit=7)
 
             # Drop rows with too many NaN
-            station_df = station_df.dropna(subset=['TMAX', 'TMIN'])
+            station_df = station_df.dropna(subset=features[:2])
 
             if len(station_df) < input_days + target_days:
                 continue
@@ -239,28 +244,38 @@ class GHCNProcessor:
                 X = np.nan_to_num(X, nan=np.nanmean(X))
                 Y = np.nan_to_num(Y, nan=np.nanmean(Y))
 
-                # Get day of year for the first target day
+                # Forecast start date (first day of target window) — needed for
+                # chronological splitting so val/test never sees future training data.
                 target_date = pd.Timestamp(dates[i + input_days])
                 day_of_year = target_date.dayofyear / 365.0  # Normalize
 
                 sequences_X.append(X)
                 sequences_Y.append(Y)
                 sequences_meta.append([lat, lon, elev, day_of_year])
+                sequences_dates.append(np.datetime64(target_date.date(), 'D'))
 
         if not sequences_X:
             logger.error("No valid sequences created!")
-            return np.array([]), np.array([]), np.array([])
+            empty = np.array([])
+            return empty, empty, empty, empty
 
         X = np.array(sequences_X, dtype=np.float32)
         Y = np.array(sequences_Y, dtype=np.float32)
         meta = np.array(sequences_meta, dtype=np.float32)
+        dates = np.array(sequences_dates, dtype='datetime64[D]')
 
         logger.success(f"Created {len(X)} training sequences")
         logger.info(f"X shape: {X.shape}, Y shape: {Y.shape}, meta shape: {meta.shape}")
 
-        return X, Y, meta
+        return X, Y, meta, dates
 
-    def save_training_data(self, X: np.ndarray, Y: np.ndarray, meta: np.ndarray):
+    def save_training_data(
+        self,
+        X: np.ndarray,
+        Y: np.ndarray,
+        meta: np.ndarray,
+        dates: Optional[np.ndarray] = None,
+    ):
         """Save processed training data."""
         output_dir = self.processed_dir / "training"
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -268,6 +283,8 @@ class GHCNProcessor:
         np.save(output_dir / "X.npy", X)
         np.save(output_dir / "Y.npy", Y)
         np.save(output_dir / "meta.npy", meta)
+        if dates is not None:
+            np.save(output_dir / "dates.npy", dates)
 
         logger.success(f"Saved training data to {output_dir}")
 
@@ -303,16 +320,16 @@ def main():
     df.to_parquet(processed_dir / "ghcn_combined.parquet")
     logger.info(f"Saved combined data to {processed_dir / 'ghcn_combined.parquet'}")
 
-    # Create training sequences
-    X, Y, meta = processor.create_training_sequences(
+    # Create training sequences (90-day target matches the model's claimed horizon)
+    X, Y, meta, dates = processor.create_training_sequences(
         df,
         input_days=30,
-        target_days=14,
+        target_days=90,
         stride=7
     )
 
     if len(X) > 0:
-        processor.save_training_data(X, Y, meta)
+        processor.save_training_data(X, Y, meta, dates)
 
 
 if __name__ == "__main__":

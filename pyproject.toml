@@ -39,11 +39,13 @@ dependencies = [
     "torchvision>=0.16.0",
     "lightning>=2.1.0",
 
-    # Graph Neural Networks
-    "torch-geometric>=2.4.0",
-
     # Transformers & Attention
-    "xformers>=0.0.23",
+    # Note: xformers is no longer required — the temporal transformer falls
+    # back gracefully when flash_attn is not available. Install flash-attn
+    # separately on Linux/CUDA for the fastest attention path on Blackwell:
+    #     pip install flash-attn --no-build-isolation
+    # And install torch-geometric (or pyg-lib) only if you need the GAT path:
+    #     pip install torch-geometric
     "einops>=0.7.0",
 
     # Data Processing
@@ -110,6 +112,17 @@ train = [
     "bitsandbytes>=0.41.0",
     "accelerate>=0.24.0",
     "tensorboard>=2.15.0",
+]
+
+# GNN extras — opt-in because torch-geometric has heavy CUDA-specific build deps
+graph = [
+    "torch-geometric>=2.4.0",
+]
+
+# Fast attention on CUDA. flash-attn ships Linux wheels; on Windows you'll
+# typically train via WSL2 to use it.
+fast = [
+    "flash-attn>=2.5.0; sys_platform == 'linux'",
 ]
 
 inference = [

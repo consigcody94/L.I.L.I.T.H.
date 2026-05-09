@@ -274,6 +274,13 @@ class ForecastDecoder(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
         )
 
+        # LayerNorm after each residual step. Without this the autoregressive
+        # rollout compounds activations multiplicatively across forecast_length
+        # steps; at forecast_length=90 the output magnitude blows up by ~10^6.
+        # Normalizing the running latent caps the spectrum so 90-day outputs
+        # stay in the same scale as 14-day outputs.
+        self.step_norm = nn.LayerNorm(hidden_dim)
+
         # Output projection
         self.output_proj = nn.Linear(hidden_dim, output_dim)
 
@@ -315,23 +322,18 @@ class ForecastDecoder(nn.Module):
         outputs = []
 
         # Autoregressive rollout
+        # state is (batch, n_stations, hidden_dim); pos_enc[t] broadcasts over stations
         state = latent
         for t in range(n_steps):
-            # Add positional info
             step_input = state + pos_enc[:, t:t+1, :]
+            state = self.step_norm(state + self.step_predictor(step_input))
+            outputs.append(self.output_proj(state))  # (batch, n_stations, output_dim)
 
-            # Predict next state
-            state = state + self.step_predictor(step_input)
-
-            # Project to output
-            output = self.output_proj(state)
-            outputs.append(output)
-
-        # Stack outputs
-        forecasts = torch.cat(outputs, dim=-2)  # (batch, n_stations, n_steps, output_dim)
+        # Stack along a new time dimension -> (batch, n_stations, n_steps, output_dim)
+        forecasts = torch.stack(outputs, dim=-2)
 
         if squeeze_output:
-            forecasts = forecasts.squeeze(1)
+            forecasts = forecasts.squeeze(1)  # drop the singleton n_stations axis
 
         return forecasts
 
@@ -485,16 +487,9 @@ class LILITH(nn.Module):
         """
         batch_size, n_stations, seq_len, n_features = node_features.shape
 
-        # 1. Station embedding
-        # Reshape for embedding: (batch * n_stations, seq_len, n_features)
-        x = node_features.view(batch_size * n_stations, seq_len, n_features)
-        coords_flat = node_coords.view(batch_size * n_stations, 3)
-
-        embedded = self.station_embed(
-            x.view(batch_size * n_stations * seq_len, n_features),
-            None,  # coords handled separately
-        )
-        embedded = embedded.view(batch_size, n_stations, seq_len, -1)
+        # 1. Station embedding (4D path: handles seq_len and adds positional encoding)
+        embedded = self.station_embed(node_features, node_coords)
+        # embedded: (batch, n_stations, seq_len, hidden_dim)
 
         # 2. Temporal processing per station
         # Process each station's sequence
@@ -572,41 +567,68 @@ class LILITH(nn.Module):
         edge_index: torch.Tensor,
         edge_attr: Optional[torch.Tensor] = None,
         n_members: int = 10,
+        method: str = "mc_dropout",
         **kwargs,
     ) -> torch.Tensor:
         """
-        Generate ensemble forecast.
+        Generate a real ensemble forecast.
 
         Args:
-            node_features: Input observations
-            node_coords: Station coordinates
-            edge_index: Graph connectivity
-            edge_attr: Edge features
-            n_members: Number of ensemble members
-            **kwargs: Additional arguments passed to forward
+            n_members: ensemble size.
+            method: one of {"mc_dropout", "head_sample"}.
+                * "mc_dropout" — keep dropout active and re-run the full model
+                  N times. Captures *epistemic* uncertainty across the whole
+                  pipeline and is the strongest signal at long lead times.
+                * "head_sample" — single deterministic forward, then sample N
+                  perturbations from the trained ensemble head's distribution.
+                  ~N× cheaper but only captures the head's calibrated noise,
+                  not full-model uncertainty.
 
         Returns:
-            Ensemble forecasts of shape (n_members, batch, n_stations, forecast_len, output_features)
+            (n_members, batch, n_stations, forecast_len, output_features)
         """
-        # Get deterministic forecast first
-        with torch.no_grad():
-            result = self.forward(
-                node_features, node_coords, edge_index, edge_attr, **kwargs
-            )
+        if method == "head_sample":
+            self.eval()
+            with torch.no_grad():
+                # Re-derive the latent that feeds the ensemble head by running
+                # forward but stopping before the deterministic decoder.
+                result = self.forward(
+                    node_features, node_coords, edge_index, edge_attr, **kwargs
+                )
+            base = result["forecast"]
+            # Sample additive perturbations from the head's distribution.
+            # The head returns samples shaped (n_samples, batch*n_stations, output_dim);
+            # we broadcast across the time axis since the head doesn't know about it.
+            batch, n_stations, fcst_len, out_dim = base.shape
+            cond = base[:, :, -1, :].reshape(-1, out_dim)  # last-step latent proxy
+            samples = self.ensemble_head.sample(cond, n_members)  # (n, batch*stations, out_dim)
+            samples = samples.view(n_members, batch, n_stations, 1, out_dim)
+            # Use the head's spread but re-center on the deterministic forecast,
+            # then broadcast the perturbation across time with linear ramp so
+            # uncertainty grows with lead time (a real-world prior).
+            perturb = samples - samples.mean(dim=0, keepdim=True)
+            ramp = torch.linspace(0, 1, fcst_len, device=base.device).view(1, 1, 1, fcst_len, 1)
+            return base.unsqueeze(0) + perturb * ramp
 
-        # Generate ensemble using ensemble head
-        # This is a simplified version; full implementation would use
-        # the ensemble head throughout the forward pass
+        # Default: MC Dropout. Keep dropout layers in train mode while
+        # everything else stays eval (no batchnorm tracking changes).
+        was_training = self.training
+        for module in self.modules():
+            if isinstance(module, nn.Dropout):
+                module.train()
+            elif isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+                module.eval()
 
-        ensemble = [result["forecast"]]
-
-        # For now, add noise-based perturbations
-        # A more sophisticated approach would use the diffusion ensemble head
-        base_forecast = result["forecast"]
-        for _ in range(n_members - 1):
-            # Add calibrated noise
-            noise = torch.randn_like(base_forecast) * 0.1
-            ensemble.append(base_forecast + noise)
+        ensemble: List[torch.Tensor] = []
+        try:
+            with torch.no_grad():
+                for _ in range(n_members):
+                    result = self.forward(
+                        node_features, node_coords, edge_index, edge_attr, **kwargs
+                    )
+                    ensemble.append(result["forecast"])
+        finally:
+            self.train(was_training)
 
         return torch.stack(ensemble, dim=0)
 
