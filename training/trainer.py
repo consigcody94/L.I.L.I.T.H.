@@ -18,7 +18,10 @@ import json
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from torch.cuda.amp import autocast, GradScaler
+# torch.cuda.amp.{autocast,GradScaler} are deprecated in torch 2.4+; use the
+# top-level ``torch.amp`` API which works for all device types and is the
+# only path that won't emit deprecation warnings on a 5070-class GPU.
+from torch.amp import autocast, GradScaler  # type: ignore[attr-defined]
 from loguru import logger
 
 try:
@@ -190,7 +193,10 @@ class Trainer:
         )
 
         # Set up mixed precision
-        self.scaler = GradScaler() if config.use_amp else None
+        # The new GradScaler signature requires device_type. Pin to cuda since
+        # this trainer assumes a CUDA path; CPU-only callers go through
+        # train_simple.py which has its own AMP handling.
+        self.scaler = GradScaler("cuda") if config.use_amp else None
         self.amp_dtype = torch.float16 if config.amp_dtype == "float16" else torch.bfloat16
 
         # Training state
@@ -275,7 +281,7 @@ class Trainer:
         forecast_len = self.get_current_forecast_length()
 
         # Forward pass with mixed precision
-        with autocast(enabled=self.config.use_amp, dtype=self.amp_dtype):
+        with autocast("cuda", enabled=self.config.use_amp, dtype=self.amp_dtype):
             # Forward pass
             outputs = self.model(
                 node_features=batch["node_features"],
@@ -344,7 +350,7 @@ class Trainer:
         for batch in self.val_dataloader:
             batch = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
-            with autocast(enabled=self.config.use_amp, dtype=self.amp_dtype):
+            with autocast("cuda", enabled=self.config.use_amp, dtype=self.amp_dtype):
                 outputs = self.model(
                     node_features=batch["node_features"],
                     node_coords=batch["node_coords"],

@@ -288,6 +288,115 @@ def train_full(
 # ----- forecast / api --------------------------------------------------------
 
 
+@app.command("evaluate")
+def evaluate(
+    checkpoint: Optional[str] = typer.Option(None,
+                                             help="Checkpoint to evaluate. Defaults to checkpoints/lilith_best.pt."),
+    training_dir: str = typer.Option("data/processed/training"),
+    val_fraction: float = 0.1,
+    require_beats_baselines: bool = typer.Option(False,
+                                                 help="Exit non-zero if the model fails to beat persistence + climatology"),
+):
+    """Evaluate a checkpoint against persistence and climatology baselines.
+
+    Reports RMSE for the model and both trivial baselines on the same
+    chronological val split. The trained model should beat both — if it
+    doesn't, training broke or inference is corrupted.
+    """
+    import json
+
+    import numpy as np
+    import torch
+
+    from inference.baselines import (
+        assert_model_beats_baselines,
+        evaluate_baselines,
+    )
+    from inference.simple_forecaster import SimpleForecaster
+
+    train_dir = Path(training_dir)
+    if not (train_dir / "X.npy").exists():
+        typer.echo(f"No training data at {train_dir}. Run `lilith process ghcn` first.", err=True)
+        raise typer.Exit(1)
+
+    ckpt = checkpoint or os.environ.get("LILITH_CHECKPOINT") or "checkpoints/lilith_best.pt"
+    if not Path(ckpt).exists():
+        typer.echo(f"Checkpoint not found: {ckpt}", err=True)
+        raise typer.Exit(1)
+
+    X = np.load(train_dir / "X.npy")
+    Y = np.load(train_dir / "Y.npy")
+    meta = np.load(train_dir / "meta.npy")
+    dates_p = train_dir / "dates.npy"
+    dates = np.load(dates_p) if dates_p.exists() else None
+    stats = np.load(train_dir / "stats.npz")
+
+    # Apply same normalization as the trainer
+    X_n = (X - stats["X_mean"]) / (stats["X_std"] + 1e-6)
+    Y_n = (Y - stats["Y_mean"]) / (stats["Y_std"] + 1e-6)
+    meta_n = meta.copy()
+    meta_n[:, 0] /= 90.0
+    meta_n[:, 1] /= 180.0
+    meta_n[:, 2] /= 5000.0
+
+    # Chronological split
+    if dates is not None:
+        order = np.argsort(dates)
+        cut = int(len(order) * (1 - val_fraction))
+        val_idx = order[cut:]
+    else:
+        val_idx = np.arange(int(len(X) * (1 - val_fraction)), len(X))
+
+    X_val = X_n[val_idx]
+    Y_val = Y_n[val_idx]
+    meta_val = meta_n[val_idx]
+    dates_val = dates[val_idx] if dates is not None else None
+
+    typer.echo(f"Evaluating on {len(val_idx):,} val samples...")
+    baselines = evaluate_baselines(
+        X_val, Y_val, meta_val, dates_val,
+        Y_mean=stats["Y_mean"], Y_std=stats["Y_std"],
+    )
+
+    # Run the model
+    fc = SimpleForecaster(ckpt, device="auto")
+    sq = 0.0
+    n_elem = 0
+    for i in range(len(val_idx)):
+        # Denormalize history for the forecaster (it normalizes internally)
+        hist = X[val_idx[i]]
+        out = fc.forecast(
+            latitude=float(meta[val_idx[i], 0]),
+            longitude=float(meta[val_idx[i], 1]),
+            forecast_days=Y.shape[1],
+            history=hist,
+            elevation=float(meta[val_idx[i], 2]),
+        )
+        # Pull TMAX/TMIN out of the structured response
+        tmax = np.array([f["temperature_high"] for f in out["forecasts"]])
+        tmin = np.array([f["temperature_low"] for f in out["forecasts"]])
+        truth = Y[val_idx[i], :, :2]
+        pred = np.stack([tmax, tmin], axis=-1)[:truth.shape[0]]
+        sq += float(((pred - truth) ** 2).sum())
+        n_elem += pred.size
+
+    model_rmse_temp = float(np.sqrt(sq / max(n_elem, 1)))
+
+    summary = {
+        "model_rmse_temp_C": model_rmse_temp,
+        "baselines": baselines,
+        "n_val": int(len(val_idx)),
+    }
+    typer.echo(json.dumps(summary, indent=2))
+
+    if require_beats_baselines:
+        try:
+            assert_model_beats_baselines(model_rmse_temp, baselines)
+        except AssertionError as exc:
+            typer.echo(f"\nFAIL: {exc}", err=True)
+            raise typer.Exit(1)
+
+
 @app.command("forecast")
 def forecast(
     lat: float = typer.Option(..., help="Latitude (-90, 90)"),
