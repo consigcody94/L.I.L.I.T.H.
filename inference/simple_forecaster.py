@@ -250,103 +250,128 @@ class SimpleForecaster:
         latitude: float,
         longitude: float,
         forecast_days: int = 14,
-        history: np.ndarray = None
+        history: np.ndarray = None,
+        elevation: float = 0.0,
+        ensemble_samples: int = 0,
+        bias_correct_to_climatology: bool = False,
     ) -> Dict[str, Any]:
         """
         Generate weather forecast for a location.
 
         Args:
-            latitude: Location latitude
-            longitude: Location longitude
-            forecast_days: Number of days to forecast (max 90)
-            history: Optional historical data [30, 3] (TMAX, TMIN, PRCP)
+            latitude, longitude: Location.
+            forecast_days: Days to forecast (capped at the model's training horizon).
+            history: Optional 30-day input array of shape (30, 3) — TMAX, TMIN, PRCP.
+                     If None, falls back to the climatology-based synthetic history,
+                     which is fine for smoke tests but should NEVER be used in
+                     production: real station observations should be passed in.
+            elevation: Station elevation in meters (used by the model's metadata
+                       embedding). Defaults to 0.
+            ensemble_samples: If > 0, run MC Dropout ``ensemble_samples`` times
+                              and return mean + 5/95 percentiles. Cost grows
+                              linearly with this argument.
+            bias_correct_to_climatology: If True, blend a climatology prior into
+                                         the model output (useful when training
+                                         data was station-sparse). Default False
+                                         — IMPORTANT: prior versions of this code
+                                         silently overrode model predictions with
+                                         climatology + noise, which made the RMSE
+                                         numbers reported back to users
+                                         meaningless. Now opt-in and labeled.
 
         Returns:
-            Dictionary with forecast data
+            Dict with model-derived forecast, optionally with uncertainty bands.
         """
-        forecast_days = min(forecast_days, 90)
+        forecast_days = min(forecast_days, self.config.get("max_forecast", 90))
 
-        # Get or generate historical data
         if history is None:
+            logger.warning(
+                "No real history provided — falling back to synthetic climatology. "
+                "Forecast quality will degrade because the model has never seen this "
+                "exact input distribution. Pass real station observations in production."
+            )
             history = self._create_synthetic_history(latitude, longitude)
 
         # Normalize input
         x_norm = self._normalize_input(history)
 
-        # Create metadata: [lat, lon, elevation, day_of_year]
+        # Metadata: [lat, lon, elevation, day_of_year] — same normalization as
+        # train_simple.py applies (lat/90, lon/180, elev/5000, doy/365).
         day_of_year = datetime.now().timetuple().tm_yday / 365.0
         meta = np.array([
-            latitude / 90.0,  # Normalize lat
-            longitude / 180.0,  # Normalize lon
-            0.0,  # Elevation (assume sea level)
-            day_of_year
+            latitude / 90.0,
+            longitude / 180.0,
+            elevation / 5000.0,
+            day_of_year,
         ])
 
-        # Convert to tensors
         x_tensor = torch.from_numpy(x_norm).float().unsqueeze(0).to(self.device)
         meta_tensor = torch.from_numpy(meta).float().unsqueeze(0).to(self.device)
 
-        # Run inference
-        pred_norm = self.model(x_tensor, meta_tensor, forecast_days)
-        pred_norm = pred_norm.cpu().numpy()[0]  # [forecast_days, 3]
+        # Inference path: deterministic OR MC Dropout ensemble.
+        if ensemble_samples > 0:
+            samples = self.model.mc_dropout_forecast(
+                x_tensor, meta_tensor, forecast_days, n_samples=ensemble_samples
+            )  # (n_samples, 1, forecast_days, 3)
+            samples_np = samples.squeeze(1).cpu().numpy()  # (n_samples, forecast_days, 3)
+            pred_norm = samples_np.mean(axis=0)
+            lower_norm = np.quantile(samples_np, 0.05, axis=0)
+            upper_norm = np.quantile(samples_np, 0.95, axis=0)
+        else:
+            pred_norm = self.model(x_tensor, meta_tensor, forecast_days).cpu().numpy()[0]
+            lower_norm = upper_norm = None
 
-        # Denormalize
+        # Denormalize using the SAME stats the model was trained with.
         pred = self._denormalize_output(pred_norm)
+        lower = self._denormalize_output(lower_norm) if lower_norm is not None else None
+        upper = self._denormalize_output(upper_norm) if upper_norm is not None else None
 
-        # Build response
+        # Optional climatology blend (off by default — see docstring).
+        if bias_correct_to_climatology:
+            expected = self._get_expected_climatology(latitude, longitude)
+            blend = 0.3  # 70% model, 30% climatology
+            pred[:, 0] = (1 - blend) * pred[:, 0] + blend * expected["tmax"]
+            pred[:, 1] = (1 - blend) * pred[:, 1] + blend * expected["tmin"]
+
         start_date = datetime.now().date() + timedelta(days=1)
         forecasts = []
-
-        # Get expected climatology for this location/season for bias correction
-        expected_temps = self._get_expected_climatology(latitude, longitude)
-        expected_tmax = expected_temps['tmax']
-        expected_tmin = expected_temps['tmin']
-
-        # Add day-to-day weather variability using seeded randomness
-        np.random.seed(int(datetime.now().timestamp() / 3600) % 2**31)  # Changes every hour
-
         for i in range(forecast_days):
-            forecast_date = start_date + timedelta(days=i)
-            raw_tmax = float(pred[i, 0])
-            raw_tmin = float(pred[i, 1])
-            prcp = float(max(0, pred[i, 2]))
+            tmax = float(pred[i, 0])
+            tmin = float(pred[i, 1])
+            prcp = max(0.0, float(pred[i, 2]))
 
-            # Add realistic day-to-day weather variability
-            # Weather patterns create multi-day trends with some randomness
-            pattern_phase = np.sin(2 * np.pi * i / 5)  # ~5-day weather cycle
-            daily_var = np.random.randn() * 2.5  # Random daily variation ±5°C
-            pattern_var = pattern_phase * 3  # Systematic pattern variation ±3°C
+            # Sanity guard: temperature physics. Don't quietly hide it with
+            # random noise like the old code did — emit it as-predicted and let
+            # the caller see the problem if the model is broken.
+            if tmin > tmax:
+                tmax, tmin = tmin, tmax  # swap is the least-bad recovery
 
-            # Start from climatology baseline and add variations
-            tmax = expected_tmax + daily_var + pattern_var * 0.5
-            tmin = expected_tmin + daily_var * 0.7 + pattern_var * 0.3
-
-            # Ensure tmin < tmax with reasonable diurnal range (8-12°C)
-            diurnal_range = tmax - tmin
-            if diurnal_range < 6:
-                tmin = tmax - 8 - np.random.rand() * 4
-            elif diurnal_range > 15:
-                tmin = tmax - 10 - np.random.rand() * 3
-
-            forecasts.append({
-                "date": forecast_date.isoformat(),
+            day = {
+                "date": start_date + timedelta(days=i),
                 "day": i + 1,
                 "temperature_high": round(tmax, 1),
                 "temperature_low": round(tmin, 1),
                 "precipitation_mm": round(prcp, 1),
-                "precipitation_probability": min(100, int(prcp * 10 + np.random.rand() * 20)),
-            })
+                # Probability heuristic — model only predicts amount, not P(rain).
+                "precipitation_probability": min(100, int(round(min(prcp, 10.0) * 10))),
+            }
+            day["date"] = day["date"].isoformat()
+            if lower is not None and upper is not None:
+                day["temperature_high_lower"] = round(float(lower[i, 0]), 1)
+                day["temperature_high_upper"] = round(float(upper[i, 0]), 1)
+                day["temperature_low_lower"] = round(float(lower[i, 1]), 1)
+                day["temperature_low_upper"] = round(float(upper[i, 1]), 1)
+            forecasts.append(day)
 
         return {
-            "location": {
-                "latitude": latitude,
-                "longitude": longitude
-            },
+            "location": {"latitude": latitude, "longitude": longitude, "elevation": elevation},
             "generated_at": datetime.now().isoformat(),
             "model_version": "SimpleLILITH v1",
-            "model_rmse": self.checkpoint.get('val_rmse', None),
+            "model_rmse": self.checkpoint.get("val_rmse", None),
             "forecast_days": forecast_days,
-            "forecasts": forecasts
+            "ensemble_samples": ensemble_samples,
+            "bias_corrected": bias_correct_to_climatology,
+            "forecasts": forecasts,
         }
 
     def forecast_hourly(

@@ -304,21 +304,51 @@ async def create_batch_forecast(request: BatchForecastRequest):
         if _forecaster is None:
             forecast = await _generate_fallback_forecast(single_request)
         else:
+            # SimpleForecaster.forecast returns a plain dict — flatten it into
+            # the same DailyForecast pydantic model as the single-location route.
+            # BatchForecastRequest doesn't expose ensemble_members; honor it via
+            # getattr so the single-route's default (10) doesn't leak in.
+            ensemble = (
+                getattr(request, "ensemble_members", 0) if request.include_uncertainty else 0
+            )
             response = _forecaster.forecast(
                 latitude=location.latitude,
                 longitude=location.longitude,
                 forecast_days=request.days,
-                include_uncertainty=request.include_uncertainty,
+                ensemble_samples=ensemble,
             )
+
+            daily = []
+            for f in response["forecasts"]:
+                df = DailyForecast(
+                    date=f["date"],
+                    temperature_max=f["temperature_high"],
+                    temperature_min=f["temperature_low"],
+                    precipitation=f["precipitation_mm"],
+                    precipitation_probability=f["precipitation_probability"] / 100.0,
+                )
+                if request.include_uncertainty:
+                    # Prefer real bands from MC Dropout when available; otherwise fall
+                    # back to a lead-time-scaled heuristic.
+                    if "temperature_high_lower" in f:
+                        df.temperature_max_lower = f["temperature_high_lower"]
+                        df.temperature_max_upper = f["temperature_high_upper"]
+                        df.temperature_min_lower = f["temperature_low_lower"]
+                        df.temperature_min_upper = f["temperature_low_upper"]
+                    else:
+                        u = 2.0 + (f["day"] / 14) * 2.0
+                        df.temperature_max_lower = round(f["temperature_high"] - u, 1)
+                        df.temperature_max_upper = round(f["temperature_high"] + u, 1)
+                        df.temperature_min_lower = round(f["temperature_low"] - u, 1)
+                        df.temperature_min_upper = round(f["temperature_low"] + u, 1)
+                daily.append(df)
+
             forecast = ForecastResponse(
-                location=location,
-                generated_at=response.generated_at,
-                model_version=response.model_version,
-                forecast_days=response.forecast_days,
-                forecasts=[
-                    DailyForecast(**f.__dict__)
-                    for f in response.forecasts
-                ],
+                location=Location(latitude=location.latitude, longitude=location.longitude),
+                generated_at=response["generated_at"],
+                model_version=response["model_version"],
+                forecast_days=response["forecast_days"],
+                forecasts=daily,
             )
 
         forecasts.append(forecast)
