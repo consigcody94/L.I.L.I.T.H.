@@ -65,7 +65,8 @@ L.I.L.I.T.H. takes a different approach:
 | **100,000+ GHCN stations** | 150+ years of quality-controlled daily observations |
 | **Climate embeddings** | ENSO, NAO, PDO, MJO, AO indices for long-range skill |
 | **INT8 / INT4 quantization** | 2&ndash;4&times; memory reduction for edge deployment |
-| **Real-time API** | FastAPI with WebSocket support, 15-minute caching |
+| **Keyless real-time data** | Open-Meteo integration &mdash; real observations, near-term blending, and live accuracy verification with no API key |
+| **Real-time API** | FastAPI with batch inference, station lookup, and 15-minute caching |
 | **Interactive frontend** | Next.js 14 with Tailwind, forecast charts, uncertainty bands |
 
 <br/>
@@ -290,6 +291,15 @@ L.I.L.I.T.H. is built entirely on **freely available public data**.
 
 Source: [NOAA NCEI](https://www.ncei.noaa.gov/products/land-based-station/global-historical-climatology-network-daily)
 
+### Serving: Open-Meteo (keyless, no account)
+
+At inference time L.I.L.I.T.H. uses [Open-Meteo](https://open-meteo.com) for real
+data &mdash; no API key, no sign-up. It supplies recent observations to seed the model,
+a real short-range forecast for near-term blending, observed values for accuracy
+verification, and place-name geocoding. The client (`data/providers/open_meteo.py`)
+uses only the Python standard library and fails soft (every call returns `None` on
+error rather than raising).
+
 ### Recommended Supplementary Data
 
 | Priority | Dataset | What It Adds |
@@ -330,16 +340,21 @@ Generate a point forecast.
 
 ```json
 {
-  "location": {"latitude": 40.7128, "longitude": -74.006, "name": "New York, NY"},
+  "location": {"latitude": 40.7128, "longitude": -74.006},
   "generated_at": "2025-01-15T12:00:00Z",
-  "model_version": "SimpleLILITH v1",
+  "model_version": "SimpleLILITH v1 (RMSE: 3.88°C, source: reference+model+observations)",
+  "forecast_days": 90,
   "forecasts": [
     {
       "date": "2025-01-16",
-      "temperature": {"mean": 2.5, "min": -1.2, "max": 6.8},
-      "precipitation": {"probability": 0.35, "amount_mm": 2.1},
-      "wind": {"speed_ms": 5.2, "direction_deg": 270},
-      "uncertainty": {"temperature_std": 1.2, "confidence": 0.85}
+      "temperature_max": 6.8,
+      "temperature_min": -1.2,
+      "precipitation": 2.1,
+      "precipitation_probability": 0.35,
+      "temperature_max_lower": 4.6,
+      "temperature_max_upper": 9.0,
+      "temperature_min_lower": -3.4,
+      "temperature_min_upper": 1.0
     }
   ]
 }
@@ -349,9 +364,23 @@ Generate a point forecast.
 
 Batch inference for multiple locations.
 
-### `GET /v1/historical/{station_id}`
+### `GET /v1/stations`
 
-Historical observations for a GHCN station.
+List GHCN training stations; filter by `latitude`/`longitude`/`radius` to find the
+nearest stations (sorted by great-circle distance).
+
+### `GET /v1/stations/{station_id}`
+
+Look up a single training station by GHCN ID.
+
+### `GET /v1/accuracy`
+
+Prediction-accuracy report. Past predictions are verified against **real** observed
+values (Open-Meteo) and aggregated into MAE/RMSE by lead time &mdash; no fabricated actuals.
+
+### `POST /v1/forecast/hourly`
+
+Hourly forecast (diurnal interpolation of the daily forecast).
 
 ### `GET /health`
 
@@ -381,16 +410,18 @@ L.I.L.I.T.H./
 │
 ├── inference/                     Inference and serving
 │   ├── simple_forecaster.py       Checkpoint loading + forecast generation
+│   ├── forecast_blend.py          Bias correction + blending (NumPy only, testable)
 │   ├── forecast.py                High-level forecast API
 │   └── quantize.py                INT8/INT4 quantization
 │
 ├── data/                          Data pipeline
 │   ├── download/                  GHCN download scripts
 │   ├── processing/                QC, normalization, gridding
+│   ├── providers/                 Keyless real-time data (Open-Meteo)
 │   └── loaders/                   PyTorch datasets
 │
 ├── web/
-│   ├── api/                       FastAPI backend
+│   ├── api/                       FastAPI backend (+ accuracy.py aggregation)
 │   └── frontend/                  Next.js 14 frontend
 │
 ├── scripts/                       CLI utilities
@@ -408,9 +439,38 @@ L.I.L.I.T.H./
 | Variable | Required | Default | Description |
 |:--|:--:|:--|:--|
 | `LILITH_CHECKPOINT` | No | Auto-detected | Path to model checkpoint |
-| `OPENWEATHER_API_KEY` | No | &mdash; | OpenWeatherMap key (fallback forecasts only) |
+| `OPENWEATHER_API_KEY` | No | &mdash; | OpenWeatherMap key (secondary fallback only) |
 
-The ML model works without any API keys. OpenWeatherMap is only used as a fallback when no trained model is loaded.
+**No API key is ever required.** Real recent observations and a real short-range
+reference forecast are pulled from [Open-Meteo](https://open-meteo.com), which is
+keyless and free for non-commercial use. This means:
+
+- With a trained checkpoint &mdash; the model produces the forecast; real
+  observations seed it and a real short-range forecast is blended into the near
+  term (see [How forecasts are produced](#how-forecasts-are-produced)).
+- With **no checkpoint at all** &mdash; the API still returns a real, full-horizon
+  forecast (Open-Meteo near term + seasonal climatology long range). Nothing is ever
+  fabricated; if no real data is reachable the API returns `503` rather than mock numbers.
+
+`OPENWEATHER_API_KEY` is only consulted as a secondary fallback if Open-Meteo is
+unreachable and a key happens to be configured.
+
+### How forecasts are produced
+
+The trained model's prediction is the core signal. Rather than being used raw (or,
+worse, discarded), its day-to-day structure is **bias-corrected against a
+seasonally-aware climatology** and combined with real data:
+
+1. **Seed** &mdash; real recent daily observations (Open-Meteo) become the model input.
+2. **Predict** &mdash; SimpleLILITH forecasts the horizon; its anomaly signal is anchored
+   to per-day climatology so absolute bias is removed but real warm/cold spells survive.
+3. **Blend** &mdash; for the first ~2 weeks, a real numerical-weather-prediction forecast
+   is blended in (NWP dominates short-range skill), fading out smoothly.
+4. **Decay** &mdash; beyond the trained 14-day window the model's weight decays toward
+   climatology, where subseasonal skill is genuinely low.
+
+Output is fully deterministic &mdash; no random perturbations. Each forecast day is
+tagged with its `source` (`reference+model`, `model+climatology`, or `climatology`).
 
 <br/>
 

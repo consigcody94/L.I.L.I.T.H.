@@ -9,12 +9,11 @@ Provides REST API for weather forecasting:
 
 import time
 import asyncio
-import httpx
 import os
 from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Optional
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 # Make torch optional for demo mode
 try:
@@ -49,11 +48,14 @@ from web.api.schemas import (
     AccuracyStats,
     AccuracyReportResponse,
 )
+from web.api.accuracy import aggregate_errors, prediction_errors
+from inference.forecast_blend import baseline_forecast
 
 # Global state for model
 _forecaster = None
 _config = None
 _weather_service = None
+_provider = None  # OpenMeteoProvider (keyless real data); set in lifespan
 
 # In-memory prediction storage (would use database in production)
 _predictions: dict[str, PredictionRecord] = {}
@@ -62,7 +64,7 @@ _prediction_counter = 0
 # Hourly prediction tracking for 5-minute verification
 _hourly_predictions: dict[str, dict] = {}  # key: lat_lon_datetime -> prediction data
 _hourly_verifications: list[dict] = []  # List of verification results
-_last_verification_time: datetime = None
+_last_verification_time: Optional[datetime] = None
 _verification_task = None  # Background task for 5-minute verification
 
 
@@ -95,12 +97,22 @@ def get_forecaster():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global _forecaster, _config, _verification_task, _weather_service
+    global _forecaster, _config, _verification_task, _weather_service, _provider
     from web.api.services.weather_service import WeatherService
-    
-    # Initialize Weather Service
+
+    # Initialize Weather Service (OpenWeatherMap, optional - needs a key)
     api_key = os.environ.get("OPENWEATHER_API_KEY", "")
     _weather_service = WeatherService(api_key=api_key)
+
+    # Initialize the keyless real-data provider (Open-Meteo). No API key required.
+    try:
+        from data.providers.open_meteo import OpenMeteoProvider
+
+        _provider = OpenMeteoProvider()
+        logger.info("Open-Meteo provider ready (keyless real data)")
+    except Exception as exc:  # pragma: no cover
+        logger.warning(f"Open-Meteo provider unavailable: {exc}")
+        _provider = None
 
     logger.info("Starting LILITH API...")
 
@@ -213,71 +225,73 @@ async def health_check():
 
 
 # Forecast endpoints
+def _add_uncertainty(daily: DailyForecast, lead_days: int) -> None:
+    """Attach 95%-style temperature bounds that widen with lead time."""
+    uncertainty = 2.0 + (lead_days / 14) * 2.0
+    daily.temperature_max_lower = round(daily.temperature_max - uncertainty, 1)
+    daily.temperature_max_upper = round(daily.temperature_max + uncertainty, 1)
+    daily.temperature_min_lower = round(daily.temperature_min - uncertainty, 1)
+    daily.temperature_min_upper = round(daily.temperature_min + uncertainty, 1)
+
+
+def _daily_forecasts(forecasts: list, include_uncertainty: bool) -> list[DailyForecast]:
+    """Convert forecaster/baseline day dicts into ``DailyForecast`` models."""
+    out: list[DailyForecast] = []
+    for f in forecasts:
+        daily = DailyForecast(
+            date=f["date"],
+            temperature_max=f["temperature_high"],
+            temperature_min=f["temperature_low"],
+            precipitation=f["precipitation_mm"],
+            precipitation_probability=min(1.0, max(0.0, f["precipitation_probability"] / 100.0)),
+        )
+        if include_uncertainty:
+            _add_uncertainty(daily, f["day"])
+        out.append(daily)
+    return out
+
+
+async def _model_forecast(request: ForecastRequest, location: Location) -> ForecastResponse:
+    """Run the loaded model off the event loop and build a ForecastResponse."""
+    if _forecaster is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+    response = await asyncio.to_thread(
+        _forecaster.forecast,
+        latitude=location.latitude,
+        longitude=location.longitude,
+        forecast_days=request.days,
+    )
+    rmse = response.get("model_rmse")
+    rmse_str = f"{rmse:.2f}" if isinstance(rmse, (int, float)) else "N/A"
+    result = ForecastResponse(
+        location=location,
+        generated_at=response["generated_at"],
+        model_version=(
+            f"SimpleLILITH v1 (RMSE: {rmse_str}°C, source: {response.get('data_source', 'model')})"
+        ),
+        forecast_days=response["forecast_days"],
+        forecasts=_daily_forecasts(response["forecasts"], request.include_uncertainty),
+    )
+    _safe_store_predictions(location, response["generated_at"], response["forecasts"])
+    return result
+
+
 @app.post("/v1/forecast", response_model=ForecastResponse, tags=["Forecast"])
 async def create_forecast(request: ForecastRequest):
     """
-    Generate weather forecast for a single location.
+    Generate a weather forecast for a single location.
 
-    Returns up to 90 days of temperature and precipitation forecasts
-    with optional uncertainty bounds.
+    Returns up to 90 days of temperature and precipitation forecasts with optional
+    uncertainty bounds. Falls back to real keyless data (Open-Meteo) when no
+    trained model is loaded.
     """
-    start_time = time.time()
+    location = Location(latitude=request.latitude, longitude=request.longitude)
 
-    # Check if model is loaded
     if _forecaster is None:
-        # Return fallback response using OWM forecast if available
         return await _generate_fallback_forecast(request)
 
     try:
-        # Use SimpleForecaster interface
-        response = _forecaster.forecast(
-            latitude=request.latitude,
-            longitude=request.longitude,
-            forecast_days=request.days,
-        )
-
-        # Convert SimpleForecaster response to Pydantic model
-        forecasts = []
-        for f in response['forecasts']:
-            daily = DailyForecast(
-                date=f['date'],
-                temperature_max=f['temperature_high'],
-                temperature_min=f['temperature_low'],
-                precipitation=f['precipitation_mm'],
-                precipitation_probability=f['precipitation_probability'] / 100.0,
-            )
-
-            if request.include_uncertainty:
-                # Add uncertainty bounds based on model RMSE (~4°C)
-                lead_days = f['day']
-                uncertainty = 2.0 + (lead_days / 14) * 2.0  # Widens with lead time
-                daily.temperature_max_lower = round(f['temperature_high'] - uncertainty, 1)
-                daily.temperature_max_upper = round(f['temperature_high'] + uncertainty, 1)
-                daily.temperature_min_lower = round(f['temperature_low'] - uncertainty, 1)
-                daily.temperature_min_upper = round(f['temperature_low'] + uncertainty, 1)
-
-            forecasts.append(daily)
-
-        # Get nearby stations for display
-        nearby_stations = _get_nearby_stations(request.latitude, request.longitude)
-
-        result = ForecastResponse(
-            location=Location(latitude=request.latitude, longitude=request.longitude),
-            generated_at=response['generated_at'],
-            model_version=f"SimpleLILITH v1 (RMSE: {response.get('model_rmse', 'N/A')}°C)",
-            forecast_days=response['forecast_days'],
-            forecasts=forecasts,
-            nearby_stations=nearby_stations,
-        )
-
-        # Store predictions for accuracy tracking (non-blocking)
-        try:
-            _store_predictions_from_response(request.latitude, request.longitude, result)
-        except Exception as track_err:
-            logger.warning(f"Failed to store prediction for tracking: {track_err}")
-
-        return result
-
+        return await _model_forecast(request, location)
     except Exception as e:
         logger.exception(f"Forecast error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -304,22 +318,11 @@ async def create_batch_forecast(request: BatchForecastRequest):
         if _forecaster is None:
             forecast = await _generate_fallback_forecast(single_request)
         else:
-            response = _forecaster.forecast(
-                latitude=location.latitude,
-                longitude=location.longitude,
-                forecast_days=request.days,
-                include_uncertainty=request.include_uncertainty,
-            )
-            forecast = ForecastResponse(
-                location=location,
-                generated_at=response.generated_at,
-                model_version=response.model_version,
-                forecast_days=response.forecast_days,
-                forecasts=[
-                    DailyForecast(**f.__dict__)
-                    for f in response.forecasts
-                ],
-            )
+            try:
+                forecast = await _model_forecast(single_request, location)
+            except Exception as e:
+                logger.exception(f"Batch forecast error for {location}: {e}")
+                forecast = await _generate_fallback_forecast(single_request)
 
         forecasts.append(forecast)
 
@@ -450,8 +453,8 @@ async def get_accuracy_report(
     Compares past predictions to actual observations and calculates
     accuracy metrics like MAE, RMSE, and accuracy by lead time.
     """
-    # Auto-verify any unverified predictions that can be checked
-    _verify_predictions_with_actuals()
+    # Auto-verify any unverified predictions that can be checked (off the loop).
+    await asyncio.to_thread(_verify_predictions_with_actuals)
 
     return _generate_accuracy_report(latitude, longitude, days_back)
 
@@ -485,97 +488,155 @@ async def verify_predictions():
     This endpoint fetches actual weather data and updates prediction
     records with observed values and error calculations.
     """
-    verified_count = _verify_predictions_with_actuals()
+    verified_count = await asyncio.to_thread(_verify_predictions_with_actuals)
     return {"message": f"Verified {verified_count} predictions", "verified_count": verified_count}
 
 
-def _get_nearby_stations(lat: float, lon: float) -> list:
+# Station endpoints (backed by the real GHCN training-station list)
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in km between two points."""
+    import math
+
+    r = 6371.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlmb = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
+
+
+def _station_info(entry) -> StationInfo:
+    station_id, name, lat, lon = entry
+    return StationInfo(
+        station_id=station_id,
+        name=name,
+        latitude=lat,
+        longitude=lon,
+        elevation=0.0,
+        country="US",
+    )
+
+
+@app.get("/v1/stations", response_model=StationListResponse, tags=["Stations"])
+async def list_stations(
+    latitude: Optional[float] = Query(None, ge=-90, le=90),
+    longitude: Optional[float] = Query(None, ge=-180, le=180),
+    radius: float = Query(5.0, ge=0.0, le=180.0, description="Filter radius in degrees"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=500),
+):
     """
-    Get nearby stations. 
-    Currently returns empty list to avoid generating fake data.
+    List GHCN training stations, optionally filtered to those near a location.
+
+    The model was trained on these 505 US stations; this exposes them for
+    discovery and nearest-station lookup.
     """
-    # In a full production implementation with a database, 
-    # we would query for stations near (lat, lon).
-    return []
+    stations = list(TRAINING_STATIONS)
+
+    if latitude is not None and longitude is not None:
+        within = [
+            s for s in stations if abs(s[2] - latitude) <= radius and abs(s[3] - longitude) <= radius
+        ]
+        within.sort(key=lambda s: _haversine_km(latitude, longitude, s[2], s[3]))
+        stations = within
+
+    total = len(stations)
+    start = (page - 1) * page_size
+    page_items = stations[start : start + page_size]
+
+    return StationListResponse(
+        stations=[_station_info(s) for s in page_items],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@app.get("/v1/stations/{station_id}", response_model=StationInfo, tags=["Stations"])
+async def get_station(station_id: str):
+    """Get a single training station by GHCN ID."""
+    for entry in TRAINING_STATIONS:
+        if entry[0] == station_id:
+            return _station_info(entry)
+    raise HTTPException(status_code=404, detail=f"Station {station_id} not found")
 
 
 async def _generate_fallback_forecast(request: ForecastRequest) -> ForecastResponse:
     """
-    Generate a fallback forecast using real data from OpenWeatherMap API.
-    Used when the local ML model is not loaded.
+    Real-data fallback forecast used when no trained model is loaded.
+
+    Strategy (all real data, never fabricated):
+      1. Open-Meteo (keyless): a real short-range forecast blended into a
+         seasonal climatology to cover the full requested horizon.
+      2. OpenWeatherMap (if an API key is configured): real 5-day forecast.
+      3. Otherwise 503 - we never return random/mock numbers.
     """
-    import datetime
-    
-    # Try to fetch real forecast from OWM
-    if _weather_service:
+    from datetime import datetime as _dt, timedelta as _td
+
+    location = Location(latitude=request.latitude, longitude=request.longitude)
+
+    # 1. Open-Meteo keyless real-data path (full horizon via climatology baseline).
+    if _provider is not None:
+        reference = await asyncio.to_thread(
+            _provider.reference_forecast, request.latitude, request.longitude
+        )
+        if reference:
+            start_date = _dt.now().date() + _td(days=1)
+            day_dicts = baseline_forecast(
+                request.latitude, request.longitude, start_date, request.days, reference
+            )
+            result = ForecastResponse(
+                location=location,
+                generated_at=_dt.now(),
+                model_version="Open-Meteo + climatology (keyless, no model loaded)",
+                forecast_days=len(day_dicts),
+                forecasts=_daily_forecasts(day_dicts, request.include_uncertainty),
+            )
+            _safe_store_predictions(location, result.generated_at.isoformat(), day_dicts)
+            return result
+
+    # 2. OpenWeatherMap fallback (only if a key is configured).
+    if _weather_service and _weather_service.api_key:
         owm_data = await _weather_service.get_forecast(request.latitude, request.longitude)
-        
         if owm_data:
-            # Transform OWM 3-hour forecast into daily summaries
-            daily_summaries = {}
-            for item in owm_data.get('list', []):
-                dt_txt = item['dt_txt']
-                date_str = dt_txt.split(' ')[0]
-                
-                if date_str not in daily_summaries:
-                    daily_summaries[date_str] = {
-                        'temps': [],
-                        'precip': 0.0,
-                        'pop': []
-                    }
-                
-                bs = daily_summaries[date_str]
-                bs['temps'].append(item['main']['temp'])
-                bs['precip'] += item.get('rain', {}).get('3h', 0.0)
-                bs['pop'].append(item.get('pop', 0.0))
-            
-            # Create Forecast objects
+            daily_summaries: dict[str, dict] = {}
+            for item in owm_data.get("list", []):
+                date_str = item["dt_txt"].split(" ")[0]
+                bucket = daily_summaries.setdefault(
+                    date_str, {"temps": [], "precip": 0.0, "pop": []}
+                )
+                bucket["temps"].append(item["main"]["temp"])
+                bucket["precip"] += item.get("rain", {}).get("3h", 0.0)
+                bucket["pop"].append(item.get("pop", 0.0))
+
             forecasts = []
-            sorted_dates = sorted(daily_summaries.keys())
-            
-            # Limit to requested days (OWM gives 5 days max)
-            for i, date_str in enumerate(sorted_dates):
+            for i, date_str in enumerate(sorted(daily_summaries)):
                 if i >= request.days:
                     break
-                    
                 data = daily_summaries[date_str]
-                temps = data['temps']
-                
-                # Simple aggregation
-                temp_max = max(temps)
-                temp_min = min(temps)
-                precip = data['precip']
-                precip_prob = max(data['pop']) if data['pop'] else 0.0
-                
                 daily = DailyForecast(
                     date=date_str,
-                    temperature_max=round(temp_max, 1),
-                    temperature_min=round(temp_min, 1),
-                    precipitation=round(precip, 1),
-                    precipitation_probability=round(precip_prob, 2),
+                    temperature_max=round(max(data["temps"]), 1),
+                    temperature_min=round(min(data["temps"]), 1),
+                    precipitation=round(data["precip"], 1),
+                    precipitation_probability=round(max(data["pop"]) if data["pop"] else 0.0, 2),
                 )
-                
                 if request.include_uncertainty:
-                    # Uncertainty is low for short-term numerical models compared to long-range AI
-                    daily.temperature_max_lower = round(temp_max - 1.0, 1)
-                    daily.temperature_max_upper = round(temp_max + 1.0, 1)
-                    daily.temperature_min_lower = round(temp_min - 1.0, 1)
-                    daily.temperature_min_upper = round(temp_min + 1.0, 1)
-                    
+                    _add_uncertainty(daily, i + 1)
                 forecasts.append(daily)
-            
+
             return ForecastResponse(
-                location=Location(latitude=request.latitude, longitude=request.longitude),
-                generated_at=datetime.datetime.now(),
-                model_version="OpenWeatherMap (Fallback)",
+                location=location,
+                generated_at=_dt.now(),
+                model_version="OpenWeatherMap (fallback)",
                 forecast_days=len(forecasts),
                 forecasts=forecasts,
-                nearby_stations=_get_nearby_stations(request.latitude, request.longitude)
             )
 
-    # If OWM fails or service missing, we define a Minimal/Empty response or error.
-    # The user demanded "NO mock data", so returning random noise is unnacceptable.
-    raise HTTPException(status_code=503, detail="Model not loaded and live weather service unavailable.")
+    raise HTTPException(
+        status_code=503,
+        detail="No model loaded and no live weather data available.",
+    )
 
 
 def _generate_demo_hourly_forecast(request: HourlyForecastRequest) -> HourlyForecastResponse:
@@ -655,39 +716,47 @@ def _generate_demo_hourly_forecast(request: HourlyForecastRequest) -> HourlyFore
     )
 
 
-def _store_predictions_from_response(lat: float, lon: float, response: ForecastResponse):
-    """Store predictions for later verification."""
+# Keep the prediction store bounded so a long-running server doesn't leak memory.
+_MAX_STORED_PREDICTIONS = 5000
+# How many lead days of each forecast to track for verification (Open-Meteo can
+# supply real actuals once these dates pass).
+_STORE_LEAD_DAYS = 7
+
+
+def _safe_store_predictions(location: Location, generated_at: str, day_dicts: list) -> None:
+    """Store the near-term forecast days for later verification (never raises)."""
+    try:
+        _store_predictions(location, generated_at, day_dicts)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Failed to store predictions for tracking: {exc}")
+
+
+def _store_predictions(location: Location, generated_at: str, day_dicts: list) -> None:
     global _prediction_counter
-    
-    # In a real system, this would write to a DB
-    # Here we just store the first day's high/low for simplicity
-    if not response.forecasts:
-        return
-        
-    first_day = response.forecasts[0]
-    
-    # Unique ID
-    _prediction_counter += 1
-    pred_id = f"PRED-{_prediction_counter:06d}"
-    
-    record = PredictionRecord(
-        id=pred_id,
-        latitude=lat,
-        longitude=lon,
-        predicted_at=response.generated_at.isoformat(),
-        target_date=first_day.date,
-        predicted_temp_high=first_day.temperature_max,
-        predicted_temp_low=first_day.temperature_min,
-        predicted_precip=first_day.precipitation,
-        model_version=response.model_version,
-        lead_time_days=1
-    )
-    
-    _predictions[pred_id] = record
+
+    for f in day_dicts[:_STORE_LEAD_DAYS]:
+        _prediction_counter += 1
+        pred_id = f"PRED-{_prediction_counter:06d}"
+        _predictions[pred_id] = PredictionRecord(
+            id=pred_id,
+            location=Location(latitude=location.latitude, longitude=location.longitude),
+            predicted_at=generated_at,
+            target_date=f["date"],
+            predicted_temp_max=f["temperature_high"],
+            predicted_temp_min=f["temperature_low"],
+            predicted_precipitation=f["precipitation_mm"],
+            predicted_precip_prob=min(1.0, max(0.0, f["precipitation_probability"] / 100.0)),
+            lead_days=f["day"],
+        )
+
+    # Evict oldest records beyond the cap.
+    if len(_predictions) > _MAX_STORED_PREDICTIONS:
+        for key in list(_predictions)[: len(_predictions) - _MAX_STORED_PREDICTIONS]:
+            _predictions.pop(key, None)
 
 
 def _store_hourly_prediction(lat: float, lon: float, target_time: str, temp: float, precip: float):
-    """Store hourly prediction for 5-minute verification."""
+    """Store an hourly prediction (used by the hourly endpoint)."""
     key = f"{lat:.4f}_{lon:.4f}_{target_time}"
     _hourly_predictions[key] = {
         "lat": lat,
@@ -695,22 +764,21 @@ def _store_hourly_prediction(lat: float, lon: float, target_time: str, temp: flo
         "target_time": target_time,
         "temperature": temp,
         "precipitation": precip,
-        "stored_at": datetime.now().isoformat()
+        "stored_at": datetime.now().isoformat(),
     }
 
 
 async def _verification_loop():
-    """Background task to verify hourly predictions against 'actuals' every 5 minutes."""
+    """Periodically verify stored predictions against real observations."""
     global _last_verification_time
-    
+
     while True:
         try:
-            logger.info("Running verification cycle...")
-            _verify_hourly_predictions()
+            count = await asyncio.to_thread(_verify_predictions_with_actuals)
+            if count:
+                logger.info(f"Verified {count} prediction(s) against real observations")
             _last_verification_time = datetime.now()
-            
-            # Wait 5 minutes
-            await asyncio.sleep(300) 
+            await asyncio.sleep(300)  # every 5 minutes
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -718,50 +786,103 @@ async def _verification_loop():
             await asyncio.sleep(60)
 
 
-def _verify_hourly_predictions():
-    """Verify stored hourly predictions against current 'actuals'."""
-    # In a real system, this would fetch real data
-    # Here we simulate finding matches
-    pass
+def _verify_predictions_with_actuals() -> int:
+    """
+    Fill in real observed values for past predictions and compute real errors.
 
+    Uses Open-Meteo (keyless). Predictions whose target date hasn't passed, or for
+    which no observation is available, are left untouched - nothing is fabricated.
+    """
+    if _provider is None:
+        return 0
 
-def _verify_predictions_with_actuals():
-    """Check stored predictions against simulated observations."""
+    today = datetime.now().date()
     verified_count = 0
-    now = datetime.now()
-    
-    for pred_id, record in _predictions.items():
-        if record.verified:
+
+    for record in list(_predictions.values()):
+        if record.actual_temp_max is not None:
             continue
-            
-        target_date = datetime.fromisoformat(record.target_date).date() if isinstance(record.target_date, str) else record.target_date
-        
-        # If target date in past, calculate error
-        if target_date < now.date():
-            # Simulate actuals
-            import random
-            actual_high = record.predicted_temp_high + random.uniform(-2, 2)
-            actual_low = record.predicted_temp_low + random.uniform(-2, 2)
-            
-            record.actual_temp_max = round(actual_high, 1)
-            record.actual_temp_min = round(actual_low, 1)
-            record.error_temp_max = round(record.predicted_temp_high - actual_high, 2)
-            record.error_temp_min = round(record.predicted_temp_low - actual_low, 2)
-            record.verified = True
-            record.verified_at = now.isoformat()
-            
-            verified_count += 1
-            
+        target = (
+            date.fromisoformat(record.target_date)
+            if isinstance(record.target_date, str)
+            else record.target_date
+        )
+        if target >= today:
+            continue
+
+        obs = _provider.daily_observations(
+            record.location.latitude, record.location.longitude, target
+        )
+        if not obs:
+            continue
+
+        record.actual_temp_max = round(obs["tmax"], 1)
+        record.actual_temp_min = round(obs["tmin"], 1)
+        record.actual_precipitation = round(obs["prcp"], 1)
+        errs = prediction_errors(
+            record.predicted_temp_max,
+            record.predicted_temp_min,
+            record.predicted_precipitation,
+            obs["tmax"],
+            obs["tmin"],
+            obs["prcp"],
+        )
+        record.temp_max_error = errs["temp_max_error"]
+        record.temp_min_error = errs["temp_min_error"]
+        record.precip_error = errs["precip_error"]
+        verified_count += 1
+
     return verified_count
 
 
-def _generate_accuracy_report(lat, lon, days):
-    """Generate dummy accuracy report."""
+def _generate_accuracy_report(lat, lon, days) -> AccuracyReportResponse:
+    """Build a real accuracy report from verified predictions."""
+    now = datetime.now()
+    records = list(_predictions.values())
+
+    location_filter = None
+    if lat is not None and lon is not None:
+        records = [
+            r
+            for r in records
+            if abs(r.location.latitude - lat) < 0.5 and abs(r.location.longitude - lon) < 0.5
+        ]
+        location_filter = f"{lat:.4f},{lon:.4f}"
+
+    verified = [r for r in records if r.actual_temp_max is not None]
+    samples = [
+        {
+            "lead_days": r.lead_days,
+            "temp_max_error": r.temp_max_error if r.temp_max_error is not None else 0.0,
+            "temp_min_error": r.temp_min_error if r.temp_min_error is not None else 0.0,
+            "predicted_precipitation": r.predicted_precipitation,
+            "actual_precipitation": r.actual_precipitation
+            if r.actual_precipitation is not None
+            else 0.0,
+        }
+        for r in verified
+    ]
+    agg = aggregate_errors(samples)
+
+    stats = AccuracyStats(
+        total_predictions=len(records),
+        verified_predictions=agg["verified_predictions"],
+        temp_max_mae=agg["temp_max_mae"],
+        temp_max_rmse=agg["temp_max_rmse"],
+        temp_min_mae=agg["temp_min_mae"],
+        temp_min_rmse=agg["temp_min_rmse"],
+        precip_mae=agg["precip_mae"],
+        precip_accuracy=agg["precip_accuracy"],
+        accuracy_by_lead_day=agg["accuracy_by_lead_day"],
+    )
+
+    recent = sorted(records, key=lambda r: str(r.predicted_at), reverse=True)[:50]
+
     return AccuracyReportResponse(
-        generated_at=datetime.now(),
-        period_days=days,
-        total_predictions=len(_predictions),
-        verified_predictions=sum(1 for p in _predictions.values() if p.verified),
-        global_stats=AccuracyStats(mae=1.5, rmse=2.1, bias=0.2, correlation=0.95),
-        lead_time_stats={}
+        generated_at=now,
+        period_start=(now - timedelta(days=days)).date().isoformat(),
+        period_end=now.date().isoformat(),
+        stats=stats,
+        recent_predictions=recent,
+        location_filter=location_filter,
     )
