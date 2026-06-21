@@ -206,16 +206,16 @@ L.I.L.I.T.H. uses a **Station-Graph Temporal Transformer (SGTT)** architecture:
 
 ### Pre-trained Model
 
-A pre-trained checkpoint is available in [releases](https://github.com/consigcody94/L.I.L.I.T.H./releases):
+A pre-trained checkpoint is published on [HuggingFace](https://huggingface.co/consigcody94/Lilith-Weather):
 
 - **505 US GHCN stations**, 9.6 million weather records
 - **1.15 million training sequences**
 - **Final RMSE: 3.88&deg;C** (temperature prediction)
 
 ```bash
-# Download pre-trained checkpoint
-curl -L -o checkpoints/lilith_best.pt \
-  https://github.com/consigcody94/L.I.L.I.T.H./releases/download/v1.0/lilith_best.pt
+# Download pre-trained checkpoint from HuggingFace
+mkdir -p checkpoints && curl -L -o checkpoints/lilith_best.pt \
+  https://huggingface.co/consigcody94/Lilith-Weather/resolve/main/lilith_best.pt
 
 # Start API with trained model
 LILITH_CHECKPOINT=checkpoints/lilith_best.pt python -m uvicorn web.api.main:app --port 8000
