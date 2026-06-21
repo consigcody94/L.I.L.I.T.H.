@@ -11,8 +11,14 @@ from web.api.main import app
 
 @pytest.fixture
 def client():
-    """Create test client."""
-    return TestClient(app)
+    """Create test client.
+
+    Use the context-manager form so FastAPI's lifespan runs and the keyless
+    Open-Meteo provider is initialized; otherwise the forecast endpoints have
+    no data source and correctly return 503.
+    """
+    with TestClient(app) as c:
+        yield c
 
 
 class TestHealthEndpoint:
