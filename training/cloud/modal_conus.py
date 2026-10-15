@@ -22,7 +22,7 @@ if modal.is_local():
 @app.function(image=test_image,cpu=2,memory=4096,timeout=600,max_containers=1,retries=0,
               volumes={'/artifacts':volume})
 def test_source(run_name):
-    import os,subprocess,json
+    import os,subprocess
     env = {**os.environ,'PYTHONPATH':'/source','OPENBLAS_NUM_THREADS':'2','OMP_NUM_THREADS':'2'}
     result = subprocess.run(['python','-m','pytest','-c','/dev/null','/source/tests/test_masked_training.py','-q'],
                              cwd='/source',env=env,capture_output=True,text=True,timeout=500)
@@ -50,9 +50,14 @@ def prepare_remote(run_name):
         raise FileExistsError('Use a new immutable preparation name')
     root.mkdir(parents=True,exist_ok=True)
     started = time.monotonic()
-    cohort = build(root/'catalog',Path('/artifacts/cache'))
-    manifest = prepare(root/'data',Path('/artifacts/cache'),None,Path('/source/protocol/PROTOCOL.md'),
-                       cohort_file=root/'catalog/CONUS_COHORT.json')
+    if (root/'data/manifest.json').exists():
+        manifest = json.loads((root/'data/manifest.json').read_text())
+        cohort = json.loads((root/'catalog/CONUS_COHORT.json').read_text())
+        print('Reusing completed immutable dataset; validating before publication',flush=True)
+    else:
+        cohort = build(root/'catalog',Path('/artifacts/cache'))
+        manifest = prepare(root/'data',Path('/artifacts/cache'),None,Path('/source/protocol/PROTOCOL.md'),
+                           cohort_file=root/'catalog/CONUS_COHORT.json')
     # Check every observed target against the retained source calendar, never imputed truth.
     with np.load(root/'data/station_calendars.npz',allow_pickle=False) as c:
         calendars,ids = c['values'],c['station_id']
@@ -77,11 +82,12 @@ def prepare_remote(run_name):
                                 'first_target':str(min(arrays['target_start'])),
                                 'last_target_end':str(max(arrays['target_start'].astype('datetime64[D]'))+np.timedelta64(13,'D'))}
     (root/'DATA_VALIDATION.json').write_text(json.dumps(validation,indent=2)+'\n')
+    volume.commit()
     # Package on Modal; do not recompress scientific archives on the Mac.
-    with zipfile.ZipFile(root/'benchmark-data.zip','w',compression=zipfile.ZIP_STORED) as archive:
+    with zipfile.ZipFile(root/'benchmark-data.zip','w',compression=zipfile.ZIP_STORED,strict_timestamps=False) as archive:
         for path in sorted((root/'data').iterdir()):
             archive.write(path,'data/'+path.name)
-    with zipfile.ZipFile(root/'noaa-source-snapshots.zip','w',compression=zipfile.ZIP_DEFLATED,compresslevel=2) as archive:
+    with zipfile.ZipFile(root/'noaa-source-snapshots.zip','w',compression=zipfile.ZIP_DEFLATED,compresslevel=2,strict_timestamps=False) as archive:
         for station in manifest['stations']:
             archive.write(Path('/artifacts/cache/all')/(station['id']+'.dly'),'all/'+station['id']+'.dly')
         for name in ['ghcnd-stations.txt','ghcnd-inventory.txt']:
@@ -91,7 +97,7 @@ def prepare_remote(run_name):
     source_files = []
     for directory in ['training','data','tests']:
         source_files.extend(p for p in (Path('/source')/directory).rglob('*.py') if '__pycache__' not in str(p))
-    with zipfile.ZipFile(root/'source.zip','w',compression=zipfile.ZIP_DEFLATED) as archive:
+    with zipfile.ZipFile(root/'source.zip','w',compression=zipfile.ZIP_DEFLATED,strict_timestamps=False) as archive:
         for file in sorted(source_files):
             archive.write(file,str(file.relative_to('/source')))
         archive.write('/source/protocol/PROTOCOL.md','PROTOCOL.md')
