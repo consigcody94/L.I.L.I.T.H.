@@ -1,15 +1,19 @@
 # Storage and size budget
 
+## NAS and Proxmox target
+
+The user has now specified an existing NAS for storage and future local Proxmox access. The default bulk store is therefore the **NAS**, with portable content-addressed manifests and optional S3-compatible access only if useful. Keep the active transactional database on a local guest disk and consistent backups on the NAS. Read [NAS_AND_PROXMOX_RESEARCH.md](NAS_AND_PROXMOX_RESEARCH.md) for sourced filesystem constraints, capacity calculations and outage/backup design. No guest or share configuration was changed.
+
 ## Recommended shape
 
 Keep relational metadata compact and large numeric arrays compressed outside the transactional database:
 
 - **PostgreSQL + PostGIS:** sources, station metadata/version history, grids, model/run manifests, object references, ingest jobs/watermarks, subscriptions, official-alert lifecycle, report index, delivery outbox and compact metric aggregates. Timescale is optional after measured workload, not a prerequisite.
-- **S3-compatible object storage:** raw source payloads, normalized station Parquet, gridded Zarr/NetCDF/GRIB products, forecast arrays, checkpoints and immutable report artifacts. Use partition pruning and chunk sizes aligned to real reads.
+- **NAS filesystem archive (optionally exposed through an S3-compatible service):** raw source payloads, normalized station Parquet, gridded Zarr/NetCDF/GRIB products, forecast arrays, checkpoints and immutable report artifacts. Use partition pruning and chunk sizes aligned to real reads.
 - **Redis:** optional cache and short-lived locks/queue acceleration; it is not the durable forecast record.
 - **SQLite pilot:** current single-host archive and local verification development. WAL and transactional writes survive restart on a persistent disk. It is not a shared database for independently mounted Modal/serverless workers.
 
-The hosting provider can be selected later. Avoid tying the record format to Modal volumes, Colab Drive, Kaggle outputs or a specific hosting platform. Those are compute/research artifacts that must export into the durable archive.
+The archive target is the existing NAS and future application hosting is Proxmox; exact guest/service resources are still a deployment decision. Avoid tying the record format to Modal volumes, Colab Drive, Kaggle outputs or a specific hosting platform. Those are compute/research artifacts that must export into the durable archive.
 
 ## Capacity math
 

@@ -2,7 +2,7 @@
 
 ## User intent and constraints
 
-Build Lilith as a **global** weather system, not a local-only product: forecast temperature and other weather, identify potential major events, integrate free/open government sources, provide professional authoritative alerts, retain original predictions and observations, compare against actual outcomes, and keep detailed accuracy reports. The user explicitly wants model training before selecting a deployment destination. Historical records from 1980 and earlier are valuable; retain full source history where quality and availability permit.
+Build Lilith as a **global** weather system, not a local-only product: forecast temperature and other weather, identify potential major events, integrate free/open government sources, provide professional authoritative alerts, retain original predictions and observations, compare against actual outcomes, and keep detailed accuracy reports. The user wants model training before deployment. Latest steering specifies the existing NAS for storage now and future hosting on Proxmox with local NAS access. Historical records from 1980 and earlier are valuable; retain full source history where quality and availability permit.
 
 The user asked this agent to do the heavy groundwork and keep a handoff for Astra to refine it. This file is the handoff; no separate Astra chat was created or messaged.
 
@@ -78,6 +78,8 @@ Live hourly New York reference data also returned 24 hours and replayed exactly.
 
 ## Priority continuation
 
+Read [RESEARCH_DECISIONS.md](RESEARCH_DECISIONS.md) and its three detailed companion reviews first. They incorporate NOAA's current GHCNh replacement for ISD, the March 2026 SPC intensity schema, marine/upper-air validation, modern global-model papers, proper hazard verification and the existing NAS/future Proxmox topology. Use the NAS for immutable bulk artifacts and local guest disk for hot SQL/WAL. The research documents are evidence and proposals, not implementation of the remaining connectors or qualification of model skill. Private host/capacity details and the checksum-verified transfer receipt are retained in local outputs rather than public Git.
+
 1. Audit the case-level prediction arrays, physical violations, geography and missingness. Broaden data using causal masks rather than dropping almost every incomplete station window. Preserve older history without pretending historical revisions were available at issue time.
 2. Specify the observation-interval and source-availability contracts. Implement independent station matching, including station ID, distance/elevation, local/reporting-day support, source/QC and correction reconciliation. Current pilot deliberately rejects a `station` comparison without this contract.
 3. Add original issue-time NWP predictors/baselines, observation release-lag handling, calibrated distributions and hazard-specific targets. Remove or disclose legacy synthetic serving input and heuristic climatology before production. Raw-model and blend skill must be scored separately.
@@ -86,7 +88,7 @@ Live hourly New York reference data also returned 24 hours and replayed exactly.
 6. Build CAP reference graph/state, authoritative feed review, spatial normalization/intersection, outage status and notification outbox/simulation. Do not send live notifications or call generated experimental risk messages official warnings.
 7. Build object-array storage, compact SQL metadata and mergeable score partitions. `STORAGE.md` quantifies why dense global hourly forever storage is not small. SQLite is a development pilot with memory-materialized reports, not the production architecture.
 8. Complete the site views in `PRODUCT_AND_ARCHITECTURE.md`, including coverage-aware accuracy maps, report library and archive UI. The delivered historical page is functional groundwork, not the finished global product.
-9. Ask for hosting only when required for deployment; the user said they will provide it later. Continue reversible local/research work without repeated permission requests. External real notifications require explicit channel/recipient authorization.
+9. Use the existing NAS archive and future Proxmox hosting plan. Resolve guest/service details only when needed for deployment; do not re-ask which bulk storage to use. Continue reversible local/research work without repeated permission requests. External real notifications require explicit channel/recipient authorization.
 
 ## Important remaining limitations
 

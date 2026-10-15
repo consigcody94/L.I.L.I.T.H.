@@ -15,7 +15,7 @@ All packages contribute to worldwide scope; the sequence is an engineering depen
 | I: report library | Immutable daily/weekly/monthly/event/training reports | Rebuild exact report from manifests; corrected versions linked | Training reports retained; scheduled operational library pending |
 | J: full site | Global forecasts/alerts/history/accuracy/coverage/archive with mobile/accessibility | Browser workflow tests including unavailable/stale/sparse data | Existing forecast site improved; full UX pending |
 | K: alert subscriptions | Opt-in routing, outbox, delivery, receipts and cancellation follow-through | Simulation, idempotent retries, user-controlled opt-out and channel tests | Planned; no external messages sent |
-| L: production deployment | User-chosen hosting, SQL/object storage, workers, monitoring and backups | Load/failover/restore drills, actual capacity/cost and shadow operation | Deferred until user supplies destination |
+| L: production deployment | User-chosen hosting, SQL/object storage, workers, monitoring and backups | Load/failover/restore drills, actual capacity/cost and shadow operation | NAS archive + future Proxmox target supplied; deployment/resource configuration pending |
 
 ## Required test matrix
 

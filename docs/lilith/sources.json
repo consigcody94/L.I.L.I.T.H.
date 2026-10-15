@@ -24,7 +24,7 @@
       "documentation": "https://www.ncei.noaa.gov/products/global-historical-climatology-network-hourly",
       "base_url": null,
       "status": "planned",
-      "notes": "Audit existing downloader against current GHCNh format; preserve subdaily intervals"
+      "notes": "GHCNh replaces ISD; current reviewed documentation v1.1.0. Bulk PSV/Parquet, variable-specific QC, report types and accumulation durations; legacy downloader migration and live probes pending."
     },
     {
       "id": "noaa_nws",
@@ -112,7 +112,7 @@
       "documentation": "https://cds.climate.copernicus.eu/",
       "base_url": null,
       "status": "planned_access_review",
-      "notes": "Separate reanalysis agreement from station accuracy; product consistency matters"
+      "notes": "Archive extends to 1940; ERA5T about five-day latency, final data normally two to three months later. Version actual releases; separate analysis-reference agreement and operationally available inputs from station truth."
     },
     {
       "id": "eccc_msc",
@@ -200,7 +200,7 @@
       "documentation": "https://www.spc.noaa.gov/climo/reports/",
       "base_url": null,
       "status": "planned",
-      "notes": "Preliminary reports are positive evidence; silence is not proof of no event"
+      "notes": "Preliminary reports are positive evidence; silence is not proof of no event. Version archived/current outlook schemas; support March 2026 Conditional Intensity Groups separately from occurrence probabilities."
     },
     {
       "id": "noaa_nhc",
@@ -222,7 +222,7 @@
       "documentation": "https://waterdata.usgs.gov/",
       "base_url": "https://api.waterdata.usgs.gov",
       "status": "planned",
-      "notes": "Flood truth needs gauge datum, interval and watershed context"
+      "notes": "Flood truth needs gauge datum, interval, watershed and provisional/final context. Review current Water Data API endpoint migrations before implementing the adapter."
     },
     {
       "id": "noaa_coops",
@@ -300,6 +300,28 @@
       "base_url": null,
       "status": "planned_access_review",
       "notes": "GOES/GPM-type products need product-specific algorithms, QA, latency and storage budgets"
+    },
+    {
+      "id": "noaa_icoads",
+      "authority": "NOAA NCEI and contributing networks",
+      "coverage": "historical surface marine platforms; uneven by era and location",
+      "role": "marine observations and independent platform evaluation",
+      "access": "public archive; release-specific formats",
+      "documentation": "https://www.ncei.noaa.gov/products/international-comprehensive-ocean-atmosphere-data-set",
+      "base_url": null,
+      "status": "planned_access_review",
+      "notes": "Archive envelope begins 1662; not dense global coverage. Preserve moving-platform positions, measurement support, source overlap and final/provisional revisions."
+    },
+    {
+      "id": "noaa_igra",
+      "authority": "NOAA NCEI and contributing radiosonde networks",
+      "coverage": "global upper-air stations; variable temporal/vertical coverage",
+      "role": "upper-air observations and pressure-level evaluation",
+      "access": "public bulk archive",
+      "documentation": "https://www.ncei.noaa.gov/products/weather-balloon/integrated-global-radiosonde-archive",
+      "base_url": null,
+      "status": "planned_access_review",
+      "notes": "Reviewed product v2.2; some records reach 1905. Preserve pressure/height support, QC, station histories and displacement when available."
     }
   ]
 }

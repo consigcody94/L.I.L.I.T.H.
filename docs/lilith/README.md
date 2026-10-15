@@ -6,12 +6,16 @@ This directory is the implementation plan. [ASTRA_HANDOFF.md](ASTRA_HANDOFF.md) 
 
 | Document | Purpose |
 |---|---|
+| [RESEARCH_DECISIONS.md](RESEARCH_DECISIONS.md) | Research synthesis, product decisions and next training gates |
 | [AUDIT.md](AUDIT.md) | What the existing repository does, evidence, and unresolved problems |
 | [PRODUCT_AND_ARCHITECTURE.md](PRODUCT_AND_ARCHITECTURE.md) | Site behavior, global coverage, alert workflows, API and worker boundaries |
 | [DATA_AND_VERIFICATION.md](DATA_AND_VERIFICATION.md) | Truth types, history, source contracts, matching, accuracy and report retention |
 | [STORAGE.md](STORAGE.md) | Compact storage design, capacity math, database entities and lifecycle |
 | [TRAINING.md](TRAINING.md) | Model families, temporal and spatial evaluation, training commands and promotion |
 | [DELIVERY_PLAN.md](DELIVERY_PLAN.md) | Work packages, dependencies and acceptance criteria |
+| [NAS_AND_PROXMOX_RESEARCH.md](NAS_AND_PROXMOX_RESEARCH.md) | Existing NAS archive and local Proxmox database/storage design |
+| [RESEARCH_FORECAST_SCIENCE.md](RESEARCH_FORECAST_SCIENCE.md) | Primary model papers, predictability, baselines and scientific roadmap |
+| [RESEARCH_VERIFICATION_AND_HAZARDS.md](RESEARCH_VERIFICATION_AND_HAZARDS.md) | NOAA/WMO observations, verification and hazards research |
 | [sources.json](sources.json) | Machine-readable government/open-data connector backlog with explicit status |
 | [training_runs.json](training_runs.json) | Measured experiment results and artifact hashes |
 
