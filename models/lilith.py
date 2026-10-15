@@ -273,6 +273,7 @@ class ForecastDecoder(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim),
         )
+        self.step_norm = nn.LayerNorm(hidden_dim)
 
         # Output projection
         self.output_proj = nn.Linear(hidden_dim, output_dim)
@@ -297,7 +298,9 @@ class ForecastDecoder(nn.Module):
         Returns:
             Forecasts of shape (batch, n_steps, output_dim) or (batch, n_stations, n_steps, output_dim)
         """
-        n_steps = n_steps or self.forecast_length
+        n_steps = self.forecast_length if n_steps is None else n_steps
+        if not 1 <= n_steps <= self.forecast_length:
+            raise ValueError("n_steps must be within the configured forecast horizon")
 
         # Handle both station-wise and global latent
         if latent.dim() == 2:
@@ -321,14 +324,14 @@ class ForecastDecoder(nn.Module):
             step_input = state + pos_enc[:, t:t+1, :]
 
             # Predict next state
-            state = state + self.step_predictor(step_input)
+            state = self.step_norm(state + self.step_predictor(step_input))
 
             # Project to output
             output = self.output_proj(state)
             outputs.append(output)
 
         # Stack outputs
-        forecasts = torch.cat(outputs, dim=-2)  # (batch, n_stations, n_steps, output_dim)
+        forecasts = torch.stack(outputs, dim=-2)  # (batch, n_stations, n_steps, output_dim)
 
         if squeeze_output:
             forecasts = forecasts.squeeze(1)
@@ -486,15 +489,7 @@ class LILITH(nn.Module):
         batch_size, n_stations, seq_len, n_features = node_features.shape
 
         # 1. Station embedding
-        # Reshape for embedding: (batch * n_stations, seq_len, n_features)
-        x = node_features.view(batch_size * n_stations, seq_len, n_features)
-        coords_flat = node_coords.view(batch_size * n_stations, 3)
-
-        embedded = self.station_embed(
-            x.view(batch_size * n_stations * seq_len, n_features),
-            None,  # coords handled separately
-        )
-        embedded = embedded.view(batch_size, n_stations, seq_len, -1)
+        embedded = self.station_embed(node_features, node_coords, mask)
 
         # 2. Temporal processing per station
         # Process each station's sequence
@@ -509,8 +504,12 @@ class LILITH(nn.Module):
         # Process all nodes together
         station_state_flat = station_state.view(-1, self.config.hidden_dim)
 
-        # Adjust edge_index for batch
-        # Assuming edge_index is already batched or we process graphs separately
+        # A shared station graph needs an offset copy for every batch element.
+        # Already-offset batched graphs keep their original edges/attributes.
+        if batch_size > 1 and edge_index.numel() and int(edge_index.max()) < n_stations:
+            edge_index = torch.cat([edge_index + i * n_stations for i in range(batch_size)], dim=1)
+            if edge_attr is not None:
+                edge_attr = edge_attr.repeat(batch_size, 1)
         graph_out = self.gat_encoder(
             station_state_flat,
             edge_index,

@@ -1,0 +1,413 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-14",
+  "feature_order": [
+    "TMAX_degC",
+    "TMIN_degC",
+    "PRCP_mm"
+  ],
+  "scope": "Geographically distributed land-station experiments; not uniform worldwide validation",
+  "test_period": "2021-2025 retrospective final GHCN records; not issue-time operational replay",
+  "promotion": "No candidate promoted. The reference NWP comparison and calibration are not yet implemented.",
+  "runs": [
+    {
+      "id": "global-h14-1980-20261014",
+      "model": "SimpleLILITH",
+      "hardware": "NVIDIA L4",
+      "selected_epoch": 25,
+      "selected_alpha": null,
+      "trained_horizon_days": 14,
+      "history": {
+        "train": "1980-2016",
+        "validation": "2017-2020",
+        "test": "2021-2025",
+        "purge": "entire input and target must remain in one split"
+      },
+      "selected_stations": 144,
+      "counts": {
+        "train": 36129,
+        "validation": 2815,
+        "test": 2836,
+        "station_holdout": 644
+      },
+      "test_stations": 42,
+      "station_holdout_stations": 8,
+      "test_model_rmse": [
+        4.3995360591814805,
+        4.533800324044488,
+        7.645222261956151
+      ],
+      "test_climatology_rmse": [
+        4.446909724711392,
+        4.563489788941553,
+        7.596656015515765
+      ],
+      "test_persistence_rmse": [
+        5.626740536074896,
+        5.830786106903708,
+        11.307322481013426
+      ],
+      "test_mse_skill_vs_climatology": [
+        0.02119535207748413,
+        0.012966513633728027,
+        -0.012819528579711914
+      ],
+      "station_holdout_model_rmse": [
+        4.516737857594031,
+        3.530880424225381,
+        5.931672513443421
+      ],
+      "station_holdout_climatology_rmse": [
+        5.730738326852928,
+        4.960019301611076,
+        5.979376209284544
+      ],
+      "checkpoint_sha256": "97d4c2537ffac53dc893d3b1fb5d9eddf1ccc4fe975ddbaadc77c67f7dcbfea9",
+      "dataset_manifest_sha256": "89dcb131e91a013ba0781f9a9fdfc3dea361c4478f4730b403c0995ff2917a33",
+      "artifact_directory": "training/global-h14-1980-20261014",
+      "status": "research_not_promoted"
+    },
+    {
+      "id": "global-h14-20261014",
+      "model": "SimpleLILITH",
+      "hardware": "NVIDIA L4",
+      "selected_epoch": 12,
+      "selected_alpha": null,
+      "trained_horizon_days": 14,
+      "history": {
+        "train": "1991-2016",
+        "validation": "2017-2020",
+        "test": "2021-2025",
+        "purge": "entire input and target must remain in one split"
+      },
+      "selected_stations": 72,
+      "counts": {
+        "train": 7586,
+        "validation": 1174,
+        "test": 1157,
+        "station_holdout": 208
+      },
+      "test_stations": 17,
+      "station_holdout_stations": 4,
+      "test_model_rmse": [
+        4.577727254890311,
+        4.168290710219573,
+        6.728403108573813
+      ],
+      "test_climatology_rmse": [
+        4.134243654691655,
+        3.86518407439562,
+        6.662722286667967
+      ],
+      "test_persistence_rmse": [
+        5.333162642059264,
+        4.955401229941703,
+        9.30839125225553
+      ],
+      "test_mse_skill_vs_climatology": [
+        -0.22605454921722412,
+        -0.16299200057983398,
+        -0.019809842109680176
+      ],
+      "station_holdout_model_rmse": [
+        5.026216578422282,
+        4.6647819398894645,
+        7.650302073301588
+      ],
+      "station_holdout_climatology_rmse": [
+        7.185517545430461,
+        6.727798649270276,
+        7.86196390504381
+      ],
+      "checkpoint_sha256": "3c46f3ea8cd8f3263431ce3ecaedc0f800a5364a31b8d534996393427fd814a9",
+      "dataset_manifest_sha256": "9afa5f072371586463065eac8f06789e4250df9701dcc0235394ddca86c71b3b",
+      "artifact_directory": "training/global-h14-20261014",
+      "status": "research_not_promoted"
+    },
+    {
+      "id": "global-h90-20261014",
+      "model": "SimpleLILITH",
+      "hardware": "NVIDIA L4",
+      "selected_epoch": 11,
+      "selected_alpha": null,
+      "trained_horizon_days": 90,
+      "history": {
+        "train": "1991-2016",
+        "validation": "2017-2020",
+        "test": "2021-2025",
+        "purge": "entire input and target must remain in one split"
+      },
+      "selected_stations": 72,
+      "counts": {
+        "train": 5794,
+        "validation": 844,
+        "test": 756,
+        "station_holdout": 70
+      },
+      "test_stations": 14,
+      "station_holdout_stations": 4,
+      "test_model_rmse": [
+        5.241234610244369,
+        4.663431078744432,
+        7.189605726828388
+      ],
+      "test_climatology_rmse": [
+        4.255846815269173,
+        3.9861661191429425,
+        7.068700572151713
+      ],
+      "test_persistence_rmse": [
+        8.644848546568074,
+        7.94345037115044,
+        9.864446556736796
+      ],
+      "test_mse_skill_vs_climatology": [
+        -0.5167018175125122,
+        -0.3686695098876953,
+        -0.034494876861572266
+      ],
+      "station_holdout_model_rmse": [
+        6.1389926940880635,
+        5.084697903548138,
+        7.303101884380612
+      ],
+      "station_holdout_climatology_rmse": [
+        6.7128080999241595,
+        6.049111557037012,
+        7.48886797664123
+      ],
+      "checkpoint_sha256": "11761e247ad15fe3a0de72829338a1ba30709eeb3a37cdb1a9ebd424be747ca8",
+      "dataset_manifest_sha256": "0efbfc441c40715a5328cc4aca0bb6a513013eec82437d8d593f69b914dd998b",
+      "artifact_directory": "training/global-h90-20261014",
+      "status": "research_not_promoted"
+    },
+    {
+      "id": "kaggle-h14-reproduction",
+      "model": "SimpleLILITH",
+      "hardware": "Tesla T4",
+      "selected_epoch": 12,
+      "selected_alpha": null,
+      "trained_horizon_days": 14,
+      "history": {
+        "train": "1991-2016",
+        "validation": "2017-2020",
+        "test": "2021-2025",
+        "purge": "entire input and target must remain in one split"
+      },
+      "selected_stations": 72,
+      "counts": {
+        "train": 7586,
+        "validation": 1174,
+        "test": 1157,
+        "station_holdout": 208
+      },
+      "test_stations": 17,
+      "station_holdout_stations": 4,
+      "test_model_rmse": [
+        4.4890736978613015,
+        4.132921219780261,
+        6.727681824148492
+      ],
+      "test_climatology_rmse": [
+        4.134243654691655,
+        3.86518407439562,
+        6.662722286667967
+      ],
+      "test_persistence_rmse": [
+        5.333162642059264,
+        4.955401229941703,
+        9.30839125225553
+      ],
+      "test_mse_skill_vs_climatology": [
+        -0.17901980876922607,
+        -0.14333736896514893,
+        -0.019591927528381348
+      ],
+      "station_holdout_model_rmse": [
+        4.909707606031051,
+        4.613504591491215,
+        7.642962281372637
+      ],
+      "station_holdout_climatology_rmse": [
+        7.185517545430461,
+        6.727798649270276,
+        7.86196390504381
+      ],
+      "checkpoint_sha256": "e915e214b72b912c1527ca41fcd26aa9eab9f60fc3ccb6dc3300c2eb884a2482",
+      "dataset_manifest_sha256": "9afa5f072371586463065eac8f06789e4250df9701dcc0235394ddca86c71b3b",
+      "artifact_directory": "training/kaggle-reproduction/reproduction",
+      "status": "research_not_promoted"
+    },
+    {
+      "id": "residual-h14-1980-20261014",
+      "model": "empirical_climatology_anomaly_ridge",
+      "hardware": "local CPU",
+      "selected_epoch": null,
+      "selected_alpha": 10000.0,
+      "trained_horizon_days": 14,
+      "history": {
+        "train": "1980-2016",
+        "validation": "2017-2020",
+        "test": "2021-2025",
+        "purge": "entire input and target must remain in one split"
+      },
+      "selected_stations": 144,
+      "counts": {
+        "train": 36129,
+        "validation": 2815,
+        "test": 2836,
+        "station_holdout": 644
+      },
+      "test_stations": 42,
+      "station_holdout_stations": 8,
+      "test_model_rmse": [
+        4.235435509510193,
+        4.374973435882869,
+        7.594760095534776
+      ],
+      "test_climatology_rmse": [
+        4.446909724711392,
+        4.563489788941553,
+        7.596656015515765
+      ],
+      "test_persistence_rmse": [
+        5.626740536074896,
+        5.830786106903708,
+        11.307322481013426
+      ],
+      "test_mse_skill_vs_climatology": [
+        0.0928447219440216,
+        0.08090583814403007,
+        0.0005005392641557194
+      ],
+      "station_holdout_model_rmse": [
+        5.101874718059148,
+        4.217864222832267,
+        5.93808969542938
+      ],
+      "station_holdout_climatology_rmse": [
+        5.730738326852928,
+        4.960019301611076,
+        5.979376209284544
+      ],
+      "checkpoint_sha256": "1bc114eac457ca337ace64b62b83f9dbde47c4fbed3fa39a9dd196710cc4f7d3",
+      "dataset_manifest_sha256": "89dcb131e91a013ba0781f9a9fdfc3dea361c4478f4730b403c0995ff2917a33",
+      "artifact_directory": "training/residual-h14-1980-20261014",
+      "status": "research_not_promoted"
+    },
+    {
+      "id": "residual-h14-20261014",
+      "model": "empirical_climatology_anomaly_ridge",
+      "hardware": "local CPU",
+      "selected_epoch": null,
+      "selected_alpha": 10000.0,
+      "trained_horizon_days": 14,
+      "history": {
+        "train": "1991-2016",
+        "validation": "2017-2020",
+        "test": "2021-2025",
+        "purge": "entire input and target must remain in one split"
+      },
+      "selected_stations": 72,
+      "counts": {
+        "train": 7586,
+        "validation": 1174,
+        "test": 1157,
+        "station_holdout": 208
+      },
+      "test_stations": 17,
+      "station_holdout_stations": 4,
+      "test_model_rmse": [
+        3.989250405175301,
+        3.704921441180862,
+        6.663267709921648
+      ],
+      "test_climatology_rmse": [
+        4.134243654691655,
+        3.86518407439562,
+        6.662722286667967
+      ],
+      "test_persistence_rmse": [
+        5.333162642059264,
+        4.955401229941703,
+        9.30839125225553
+      ],
+      "test_mse_skill_vs_climatology": [
+        0.068910078594977,
+        0.08120371178877184,
+        -0.0001669033173685719
+      ],
+      "station_holdout_model_rmse": [
+        6.195231747457831,
+        5.8449987419086,
+        7.815764100351469
+      ],
+      "station_holdout_climatology_rmse": [
+        7.185517545430461,
+        6.727798649270276,
+        7.86196390504381
+      ],
+      "checkpoint_sha256": "4257afd6b045ca5e2c16e255cab80777ac0fd6febc1036f9ce0c13ca16c81a63",
+      "dataset_manifest_sha256": "9afa5f072371586463065eac8f06789e4250df9701dcc0235394ddca86c71b3b",
+      "artifact_directory": "training/residual-h14-20261014",
+      "status": "research_not_promoted"
+    },
+    {
+      "id": "residual-h90-20261014",
+      "model": "empirical_climatology_anomaly_ridge",
+      "hardware": "local CPU",
+      "selected_epoch": null,
+      "selected_alpha": 10000.0,
+      "trained_horizon_days": 90,
+      "history": {
+        "train": "1991-2016",
+        "validation": "2017-2020",
+        "test": "2021-2025",
+        "purge": "entire input and target must remain in one split"
+      },
+      "selected_stations": 72,
+      "counts": {
+        "train": 5794,
+        "validation": 844,
+        "test": 756,
+        "station_holdout": 70
+      },
+      "test_stations": 14,
+      "station_holdout_stations": 4,
+      "test_model_rmse": [
+        4.228532592027373,
+        3.9544763523712785,
+        7.073674319275582
+      ],
+      "test_climatology_rmse": [
+        4.255846815269173,
+        3.9861661191429425,
+        7.068700572151713
+      ],
+      "test_persistence_rmse": [
+        8.644848546568074,
+        7.94345037115044,
+        9.864446556736796
+      ],
+      "test_mse_skill_vs_climatology": [
+        0.012770891684904528,
+        0.01582032842446346,
+        -0.0014064132158981835
+      ],
+      "station_holdout_model_rmse": [
+        6.490743025843045,
+        5.840742844254922,
+        7.481792264454856
+      ],
+      "station_holdout_climatology_rmse": [
+        6.7128080999241595,
+        6.049111557037012,
+        7.48886797664123
+      ],
+      "checkpoint_sha256": "a1250ffd87200cae0e5a202ca0763604562c4e1f98a05af8e75fa4ccd1e3dc56",
+      "dataset_manifest_sha256": "0efbfc441c40715a5328cc4aca0bb6a513013eec82437d8d593f69b914dd998b",
+      "artifact_directory": "training/residual-h90-20261014",
+      "status": "research_not_promoted"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "title": "Lilith global station benchmark 20261014",
+  "id": "codychurchwell/lilith-global-station-benchmark-20261014",
+  "licenses": [
+    {
+      "name": "other"
+    }
+  ],
+  "description": "Private research benchmark derived from NOAA GHCN-Daily with source hashes, train/validation/test splits and station holdouts. Land station sample; no assertion of uniform global coverage. Source code Apache-2.0; NOAA source documentation https://www.ncei.noaa.gov/pub/data/ghcn/daily/readme.txt"
+}

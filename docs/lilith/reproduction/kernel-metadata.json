@@ -1,0 +1,15 @@
+{
+  "id": "codychurchwell/lilith-global-heldout-reproduction-20261014",
+  "title": "Lilith global heldout reproduction 20261014",
+  "code_file": "main.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": false,
+  "dataset_sources": [
+    "codychurchwell/lilith-global-station-benchmark-20261014"
+  ],
+  "competition_sources": [],
+  "kernel_sources": []
+}

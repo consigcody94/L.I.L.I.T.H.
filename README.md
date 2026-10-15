@@ -13,6 +13,20 @@ model-index:
   results: []
 ---
 
+## Research status and global-system plan (October 2026)
+
+The global weather, alerting, storage, verification and training plan is in
+[docs/lilith](docs/lilith/README.md). Start with the
+[Astra handoff](docs/lilith/ASTRA_HANDOFF.md) for measured experiments and next work.
+The project is a research prototype: 90 daily outputs do not establish 90-day skill,
+and modeled historical references are not independent station observations.
+See the audit before relying on older performance claims below.
+
+Daily and hourly responses now have durable run IDs and replay endpoints. Set
+`LILITH_LEDGER_PATH` to a persistent local disk path. The pilot supports one host;
+production global storage and independent station matching remain planned.
+The historical endpoint/page retrieve actual GHCN station records.
+
 <div align="center">
 
 <img src="https://capsule-render.vercel.app/api?type=waving&color=0:0d1117,25:1a1b3a,50:1e3a5f,75:3b82f6,100:0d1117&height=250&section=header&text=L.I.L.I.T.H.&fontSize=70&fontColor=ffffff&animation=fadeIn&fontAlignY=30&desc=Long-range%20Intelligent%20Learning%20for%20Integrated%20Trend%20Hindcasting&descAlignY=55&descSize=16&descColor=8b949e"/>
@@ -29,7 +43,7 @@ model-index:
 <br/>
 
 **ML-powered 90-day weather forecasting trained on 150+ years of GHCN station data.**<br/>
-Runs on consumer GPUs. No proprietary data. No API dependencies.
+Runs on consumer GPUs. Public station data; optional external forecasts for serving.
 
 <br/>
 
@@ -65,7 +79,7 @@ L.I.L.I.T.H. takes a different approach:
 | **100,000+ GHCN stations** | 150+ years of quality-controlled daily observations |
 | **Climate embeddings** | ENSO, NAO, PDO, MJO, AO indices for long-range skill |
 | **INT8 / INT4 quantization** | 2&ndash;4&times; memory reduction for edge deployment |
-| **Keyless real-time data** | Open-Meteo integration &mdash; real observations, near-term blending, and live accuracy verification with no API key |
+| **Keyless real-time data** | Open-Meteo integration &mdash; modeled historical estimates, near-term reference blending, and reference comparisons with no API key |
 | **Real-time API** | FastAPI with batch inference, station lookup, and 15-minute caching |
 | **Interactive frontend** | Next.js 14 with Tailwind, forecast charts, uncertainty bands |
 
@@ -210,7 +224,7 @@ A pre-trained checkpoint is published on [HuggingFace](https://huggingface.co/co
 
 - **505 US GHCN stations**, 9.6 million weather records
 - **1.15 million training sequences**
-- **Final RMSE: 3.88&deg;C** (temperature prediction)
+- **Legacy reported RMSE: 3.88&deg;C** — not a validated prospective score; the original random overlapping-window split is superseded by the chronological research benchmarks in `docs/lilith/training_runs.json`.
 
 ```bash
 # Download pre-trained checkpoint from HuggingFace
@@ -375,12 +389,12 @@ Look up a single training station by GHCN ID.
 
 ### `GET /v1/accuracy`
 
-Prediction-accuracy report. Past predictions are verified against **real** observed
-values (Open-Meteo) and aggregated into MAE/RMSE by lead time &mdash; no fabricated actuals.
+Prediction-accuracy report. Past predictions are compared against **modeled reference**
+values (Open-Meteo), separately from independent station verification, and aggregated into MAE/RMSE by lead time &mdash; no fabricated actuals.
 
 ### `POST /v1/forecast/hourly`
 
-Hourly forecast (diurnal interpolation of the daily forecast).
+Hourly Open-Meteo NWP reference forecast, explicitly labeled and archived. This is not a Lilith hourly model prediction.
 
 ### `GET /health`
 
