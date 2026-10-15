@@ -323,5 +323,6 @@
       "status": "planned_access_review",
       "notes": "Reviewed product v2.2; some records reach 1905. Preserve pressure/height support, QC, station histories and displacement when available."
     }
-  ]
+  ],
+  "active_product_scope": "CONUS"
 }

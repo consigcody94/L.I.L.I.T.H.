@@ -2,6 +2,8 @@
 
 ## User intent and constraints
 
+**Latest steering (2026-10-14): focus on CONUS and the ASOS/AWOS observing network. NOAA download/preparation/testing belongs on Modal (Colab is an alternative), and neural fitting/evaluation on Kaggle CUDA GPUs. The Mac should only coordinate and transfer artifacts. Earlier worldwide design is retained as background, not the active benchmark scope.**
+
 Build Lilith as a **global** weather system, not a local-only product: forecast temperature and other weather, identify potential major events, integrate free/open government sources, provide professional authoritative alerts, retain original predictions and observations, compare against actual outcomes, and keep detailed accuracy reports. The user wants model training before deployment. Latest steering specifies the existing NAS for storage now and future hosting on Proxmox with local NAS access. Historical records from 1980 and earlier are valuable; retain full source history where quality and availability permit.
 
 The user asked this agent to do the heavy groundwork and keep a handoff for Astra to refine it. This file is the handoff; no separate Astra chat was created or messaged.

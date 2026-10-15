@@ -1,11 +1,12 @@
 # Lilith global weather system
 
-Planning and research baseline, 2026-10-14. Requested scope: worldwide weather, professional alerts, permanent forecast records, comparison with observed outcomes, retained accuracy reports, model training before hosting is selected, and an Astra refinement handoff.
+Planning and research baseline, 2026-10-14. **Current implementation/training focus: CONUS, following the latest user instruction. NOAA preparation/tests run on Modal; neural fits run on Kaggle CUDA GPUs.** Requested scope: worldwide weather, professional alerts, permanent forecast records, comparison with observed outcomes, retained accuracy reports, model training before hosting is selected, and an Astra refinement handoff.
 
 This directory is the implementation plan. [ASTRA_HANDOFF.md](ASTRA_HANDOFF.md) is the continuation entry point. A global plan is not a claim that the current model or alert ingestion already covers every location.
 
 | Document | Purpose |
 |---|---|
+| [CONUS_TRAINING.md](CONUS_TRAINING.md) | Current ASOS/AWOS benchmark, cloud execution split and evidence |
 | [RESEARCH_DECISIONS.md](RESEARCH_DECISIONS.md) | Research synthesis, product decisions and next training gates |
 | [AUDIT.md](AUDIT.md) | What the existing repository does, evidence, and unresolved problems |
 | [PRODUCT_AND_ARCHITECTURE.md](PRODUCT_AND_ARCHITECTURE.md) | Site behavior, global coverage, alert workflows, API and worker boundaries |
