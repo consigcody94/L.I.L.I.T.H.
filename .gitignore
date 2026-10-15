@@ -101,6 +101,8 @@ cython_debug/
 # Data files (large)
 data/storage/parquet/*.parquet
 data/storage/zarr/
+data/storage/*.sqlite3*
+research_artifacts/
 data/raw/
 data/processed/
 *.csv
@@ -149,6 +151,9 @@ web/frontend/out/
 web/frontend/.vercel/
 web/frontend/.turbo/
 web/frontend/coverage/
+!web/frontend/src/lib/
+!web/frontend/src/lib/utils.ts
+web/frontend/tsconfig.tsbuildinfo
 
 # Docker
 *.tar

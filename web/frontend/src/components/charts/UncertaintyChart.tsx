@@ -73,7 +73,7 @@ export function UncertaintyChart({ data, variable }: UncertaintyChartProps) {
               {label}: {Math.round(data.value)}°C
             </p>
             <p className="text-white/60 text-sm">
-              95% CI: {Math.round(data.lower)}° - {Math.round(data.upper)}°
+              Heuristic range: {Math.round(data.lower)}° - {Math.round(data.upper)}°
             </p>
           </div>
         </div>
@@ -129,7 +129,7 @@ export function UncertaintyChart({ data, variable }: UncertaintyChartProps) {
             stroke="transparent"
             fill={`url(#gradient-${variable})`}
             fillOpacity={1}
-            name="95% Confidence"
+            name="Uncalibrated range"
           />
 
           {/* Mean line */}

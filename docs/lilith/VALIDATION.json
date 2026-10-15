@@ -1,0 +1,45 @@
+{
+  "date": "2026-10-14",
+  "python_suite": {
+    "command": ".venv/bin/python -m pytest tests/ --no-cov -q",
+    "passed": 97,
+    "failed": 0,
+    "warnings": 4
+  },
+  "frontend": {
+    "command": "npm run build",
+    "result": "passed; TypeScript and static generation passed"
+  },
+  "lint": {
+    "result": "Focused Ruff F/E9 checks and git diff --check passed"
+  },
+  "browser": {
+    "workflow": "historical station query USW00094728, 1979-01-01 through 1980-12-31",
+    "result": "real NOAA data and source hash displayed; 365/366 day completeness",
+    "console": "existing missing favicon 404 only",
+    "desktop_screenshot": "historical-records-browser.png",
+    "mobile_screenshot": "historical-records-mobile.png"
+  },
+  "live_capture": {
+    "daily_locations": 6,
+    "daily_leads_per_location": 90,
+    "exact_replay": true,
+    "independent_observations_verified": 0,
+    "hourly_new_york": {
+      "hours": 24,
+      "exact_replay": true
+    },
+    "hourly_tokyo": "upstream timeout correctly returned HTTP 503"
+  },
+  "training": {
+    "completed_fits": 7,
+    "model_promotions": 0,
+    "evidence": "training_runs.json"
+  },
+  "limits": [
+    "No production deployment",
+    "No continuous global independent verification",
+    "No complete official alert lifecycle/delivery",
+    "Current forecast shadow captures use attributed reference and heuristic seasonal products, not promoted Lilith models"
+  ]
+}

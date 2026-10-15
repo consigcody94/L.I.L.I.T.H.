@@ -1,18 +1,9 @@
 """
-Open-Meteo data provider - free, keyless real weather data.
+Open-Meteo reference data provider (keyless noncommercial tier, subject to terms).
 
-Open-Meteo (https://open-meteo.com) serves real observations and forecasts with
-no API key and a generous non-commercial free tier. This provider is the project's
-bridge from "trained on real data" to "served with real data", supplying:
-
-  * recent_history()      - real recent daily observations to seed the model
-  * reference_forecast()  - a real short-range forecast for near-term blending/fallback
-  * daily_observations()  - real observed values for verifying past predictions
-  * geocode()             - place name -> coordinates
-
-It uses only the Python standard library (urllib) so it adds no dependency and can
-run anywhere. Every method fails soft: on any network/parse error it returns None
-(or an empty result) and logs, never raising into the caller.
+Forecast, analysis and reanalysis values are model estimates. They are NOT
+independent station observations. The legacy daily_observations method name is
+retained for compatibility; reports must label its output by reference basis.
 """
 
 from __future__ import annotations
@@ -21,7 +12,7 @@ import json
 import time
 import urllib.parse
 import urllib.request
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -167,7 +158,7 @@ class OpenMeteoProvider:
         self, latitude: float, longitude: float, target_day: date
     ) -> Optional[Dict[str, float]]:
         """
-        Real observed (TMAX, TMIN, PRCP) for a single past day, used to verify
+        Modeled historical (TMAX, TMIN, PRCP) for a past day, used to compare
         predictions. Picks the archive or the forecast past_days window depending
         on how recent the date is. Returns None if unavailable.
         """
@@ -205,6 +196,35 @@ class OpenMeteoProvider:
             if row["date"] == target_day:
                 return {"tmax": row["tmax"], "tmin": row["tmin"], "prcp": max(0.0, row["prcp"])}
         return None
+
+    def hourly_forecast(self, latitude: float, longitude: float, hours: int = 48) -> Optional[List[Dict[str, Any]]]:
+        """Real hourly NWP reference values; no fabricated humidity/wind defaults."""
+        fields = {
+            "temperature": "temperature_2m", "feels_like": "apparent_temperature",
+            "humidity": "relative_humidity_2m", "precipitation": "precipitation",
+            "precipitation_probability": "precipitation_probability",
+            "wind_speed": "wind_speed_10m", "wind_direction": "wind_direction_10m",
+            "cloud_cover": "cloud_cover", "pressure": "surface_pressure", "uv_index": "uv_index",
+        }
+        data = self._get(FORECAST_URL, {
+            "latitude": latitude, "longitude": longitude, "hourly": ",".join(fields.values()),
+            "forecast_days": 8, "timezone": "GMT", "wind_speed_unit": "ms",
+        })
+        hourly = (data or {}).get("hourly", {})
+        now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        rows = []
+        for index, stamp in enumerate(hourly.get("time", [])):
+            when = datetime.fromisoformat(stamp).replace(tzinfo=timezone.utc)
+            if when < now:
+                continue
+            values = {name: _at(hourly.get(field), index) for name, field in fields.items()}
+            if any(value is None for name, value in values.items() if name != "uv_index"):
+                continue
+            values["precipitation_probability"] /= 100
+            rows.append({"datetime": when.isoformat(), "hour": when.hour, **values})
+            if len(rows) == hours:
+                break
+        return rows if len(rows) == hours else None
 
     def geocode(self, name: str) -> Optional[Dict[str, Any]]:
         """Resolve a place name to coordinates and a display name."""

@@ -120,10 +120,7 @@ class GHCNProcessor:
             df['TMIN'] = df['TMIN'] / 10.0
         if 'PRCP' in df.columns:
             df['PRCP'] = df['PRCP'] / 10.0
-        if 'SNOW' in df.columns:
-            df['SNOW'] = df['SNOW'] / 10.0
-        if 'SNWD' in df.columns:
-            df['SNWD'] = df['SNWD'] / 10.0
+        # GHCN SNOW and SNWD are already millimeters, unlike PRCP.
 
         return df
 

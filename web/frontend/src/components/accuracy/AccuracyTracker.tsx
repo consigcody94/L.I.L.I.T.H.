@@ -1,6 +1,5 @@
 "use client";
 
-import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { format, parseISO } from "date-fns";
 import type { AccuracyReportResponse, PredictionRecord } from "@/hooks/useForecast";
@@ -9,50 +8,6 @@ interface AccuracyTrackerProps {
   report: AccuracyReportResponse | undefined;
   isLoading: boolean;
   unit?: "C" | "F";
-}
-
-// Countdown timer component - updates every 5 minutes
-function CountdownTimer() {
-  const [timeLeft, setTimeLeft] = useState<{ minutes: number; seconds: number }>({ minutes: 0, seconds: 0 });
-
-  useEffect(() => {
-    const calculateTimeUntilNextPrediction = () => {
-      const now = new Date();
-      const currentMinutes = now.getMinutes();
-      const currentSeconds = now.getSeconds();
-
-      // Find next 5-minute mark
-      const minutesUntilNext = 5 - (currentMinutes % 5);
-      const totalSecondsLeft = (minutesUntilNext * 60) - currentSeconds;
-
-      const minutes = Math.floor(totalSecondsLeft / 60);
-      const seconds = totalSecondsLeft % 60;
-
-      return { minutes, seconds };
-    };
-
-    setTimeLeft(calculateTimeUntilNextPrediction());
-
-    const interval = setInterval(() => {
-      setTimeLeft(calculateTimeUntilNextPrediction());
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  return (
-    <div className="flex items-center gap-1 text-sm">
-      <div className="flex items-center gap-1">
-        <span className="bg-purple-500/20 text-purple-300 px-2 py-1 rounded-lg font-mono font-bold min-w-[2.5rem] text-center">
-          {String(timeLeft.minutes).padStart(2, '0')}
-        </span>
-        <span className="text-white/30">:</span>
-        <span className="bg-purple-500/20 text-purple-300 px-2 py-1 rounded-lg font-mono font-bold min-w-[2.5rem] text-center">
-          {String(timeLeft.seconds).padStart(2, '0')}
-        </span>
-      </div>
-    </div>
-  );
 }
 
 // Convert Celsius to Fahrenheit
@@ -202,7 +157,7 @@ export function AccuracyTracker({ report, isLoading, unit = "C" }: AccuracyTrack
     return (
       <div className="text-center py-8 text-white/50">
         <p>No accuracy data available yet.</p>
-        <p className="text-sm mt-2">Predictions will be tracked and compared to actual weather observations.</p>
+        <p className="text-sm mt-2">Predictions will be tracked and compared to labeled weather reference data.</p>
       </div>
     );
   }
@@ -218,26 +173,12 @@ export function AccuracyTracker({ report, isLoading, unit = "C" }: AccuracyTrack
 
   return (
     <div className="space-y-6">
-      {/* Next Comparison Countdown */}
-      <div className="bg-gradient-to-r from-purple-500/10 via-cyan-500/10 to-purple-500/10 rounded-xl p-4 border border-purple-500/20">
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center relative">
-              <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <span className="absolute -top-1 -right-1 w-3 h-3 bg-green-500 rounded-full animate-pulse" />
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-white">Next Station Comparison</p>
-              <p className="text-xs text-white/50">Predictions verified every 5 minutes</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-white/40 hidden sm:inline">Next check in:</span>
-            <CountdownTimer />
-          </div>
-        </div>
+      <div className="rounded-xl p-4 border border-purple-500/20 bg-purple-500/10">
+        <p className="text-sm font-semibold text-white">Forecast archive and reference comparison</p>
+        <p className="text-xs text-white/60 mt-1">
+          These comparisons use Open-Meteo modeled weather data. Independent station verification
+          is not available yet. Completed daily periods are checked as reference data arrives.
+        </p>
       </div>
 
       {/* Stats overview */}
@@ -245,22 +186,22 @@ export function AccuracyTracker({ report, isLoading, unit = "C" }: AccuracyTrack
         <StatCard
           label="Predictions Tracked"
           value={stats.total_predictions.toString()}
-          subValue={`${stats.verified_predictions} verified`}
+          subValue={`${stats.verified_predictions} compared`}
         />
         <StatCard
-          label="High Temp Accuracy"
-          value={hasVerified ? `±${displayMaxMAE.toFixed(1)}°${unit}` : "N/A"}
+          label="High Temperature MAE"
+          value={hasVerified ? `${displayMaxMAE.toFixed(1)}°${unit}` : "N/A"}
           subValue={hasVerified ? `RMSE: ${displayMaxRMSE.toFixed(1)}°` : "No data yet"}
           color={hasVerified ? getAccuracyColor(stats.temp_max_mae) : undefined}
         />
         <StatCard
-          label="Low Temp Accuracy"
-          value={hasVerified ? `±${displayMinMAE.toFixed(1)}°${unit}` : "N/A"}
+          label="Low Temperature MAE"
+          value={hasVerified ? `${displayMinMAE.toFixed(1)}°${unit}` : "N/A"}
           subValue={hasVerified ? `RMSE: ${displayMinRMSE.toFixed(1)}°` : "No data yet"}
           color={hasVerified ? getAccuracyColor(stats.temp_min_mae) : undefined}
         />
         <StatCard
-          label="Precipitation Accuracy"
+          label="Wet/Dry Agreement"
           value={hasVerified ? `${stats.precip_accuracy.toFixed(0)}%` : "N/A"}
           subValue={hasVerified ? `MAE: ${stats.precip_mae.toFixed(1)}mm` : "No data yet"}
           color={hasVerified && stats.precip_accuracy > 70 ? "text-green-400" : undefined}
@@ -304,7 +245,7 @@ export function AccuracyTracker({ report, isLoading, unit = "C" }: AccuracyTrack
       {/* Recent predictions table */}
       <div className="bg-white/5 rounded-xl overflow-hidden">
         <div className="px-4 py-3 border-b border-white/10">
-          <h4 className="text-sm font-medium text-white/70">Recent Predictions vs Actuals</h4>
+          <h4 className="text-sm font-medium text-white/70">Archived Predictions vs Reference</h4>
         </div>
 
         {/* Table header */}
@@ -312,7 +253,7 @@ export function AccuracyTracker({ report, isLoading, unit = "C" }: AccuracyTrack
           <div>Date</div>
           <div className="text-center">Lead</div>
           <div className="text-center">Predicted</div>
-          <div className="text-center">Actual</div>
+          <div className="text-center">Reference</div>
           <div className="text-center">High Err</div>
           <div className="text-center">Low Err</div>
           <div className="text-center">Status</div>
@@ -339,7 +280,7 @@ export function AccuracyTracker({ report, isLoading, unit = "C" }: AccuracyTrack
           MAE = Mean Absolute Error | RMSE = Root Mean Square Error
         </p>
         <p className="mt-1">
-          Predictions are verified against actual observations once the forecast date has passed.
+          Model-reference agreement does not measure independent station accuracy. Missing comparisons remain pending.
         </p>
       </div>
     </div>

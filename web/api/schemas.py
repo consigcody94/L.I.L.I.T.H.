@@ -50,8 +50,10 @@ class DailyForecast(BaseModel):
     temperature_min: float = Field(..., description="Minimum temperature (°C)")
     precipitation: float = Field(..., ge=0, description="Precipitation (mm)")
     precipitation_probability: float = Field(..., ge=0, le=1, description="Probability of precipitation")
+    source: Optional[str] = Field(None, description="Model, reference blend or heuristic climatology")
+    uncertainty_method: str = Field("heuristic_not_calibrated", description="Bounds are not calibrated probabilities")
 
-    # Uncertainty bounds (95% confidence interval)
+    # Heuristic uncalibrated ranges; see uncertainty_method
     temperature_max_lower: Optional[float] = Field(None, description="Lower bound of max temp")
     temperature_max_upper: Optional[float] = Field(None, description="Upper bound of max temp")
     temperature_min_lower: Optional[float] = Field(None, description="Lower bound of min temp")
@@ -66,6 +68,8 @@ class ForecastResponse(BaseModel):
     model_version: str = Field(..., description="Model version used")
     forecast_days: int = Field(..., description="Number of forecast days")
     forecasts: List[DailyForecast] = Field(..., description="Daily forecasts")
+    run_id: Optional[str] = Field(None, description="Immutable archived issuance identifier")
+    checkpoint_sha256: Optional[str] = Field(None, description="Hash of loaded weights, if any")
 
     class Config:
         json_schema_extra = {
@@ -143,7 +147,7 @@ class StationListResponse(BaseModel):
 class HistoricalRequest(BaseModel):
     """Request for historical data."""
 
-    station_id: str = Field(..., description="GHCN station ID")
+    station_id: str = Field(..., pattern=r"^[A-Z0-9]{11}$", description="GHCN station ID")
     start_date: date = Field(..., description="Start date")
     end_date: date = Field(..., description="End date")
     variables: List[str] = Field(
@@ -168,6 +172,14 @@ class HistoricalResponse(BaseModel):
     station_name: str
     observations: List[HistoricalObservation]
     total_observations: int
+    source_url: Optional[str] = None
+    source_sha256: Optional[str] = None
+    day_definition: str = "station_reporting_day"
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    requested_start: Optional[str] = None
+    requested_end: Optional[str] = None
+    quality_policy: Optional[str] = None
 
 
 class HealthResponse(BaseModel):
@@ -228,6 +240,7 @@ class HourlyForecastResponse(BaseModel):
     forecast_hours: int = Field(..., description="Number of forecast hours")
     forecasts: List[HourlyForecast] = Field(..., description="Hourly forecasts")
     daily_summary: Optional[DailyForecast] = Field(None, description="Summary for first day")
+    run_id: Optional[str] = None
 
 
 # ===== Prediction Accuracy Schemas =====
@@ -257,6 +270,12 @@ class PredictionRecord(BaseModel):
     temp_min_error: Optional[float] = Field(None, description="Min temp prediction error")
     precip_error: Optional[float] = Field(None, description="Precipitation prediction error")
     lead_days: int = Field(..., description="Days ahead this was predicted")
+    run_id: Optional[str] = None
+    source: Optional[str] = None
+    model_version: Optional[str] = None
+    verification_source: Optional[str] = None
+    verification_basis: Optional[str] = None
+    verified_at: Optional[datetime] = None
 
 
 class AccuracyStats(BaseModel):
@@ -299,3 +318,6 @@ class AccuracyReportResponse(BaseModel):
     stats: AccuracyStats = Field(..., description="Aggregated statistics")
     recent_predictions: List[PredictionRecord] = Field(..., description="Recent prediction records")
     location_filter: Optional[str] = Field(None, description="Location filter applied")
+    comparison_basis: str = "modeled_reference_not_station_observations"
+    period_basis: str = "forecast_issue_time"
+    independent_station_verified: int = 0

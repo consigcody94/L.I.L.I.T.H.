@@ -13,7 +13,8 @@ import os
 from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Optional
-from datetime import date, datetime, timedelta
+from datetime import datetime, timezone
+import hashlib
 
 # Make torch optional for demo mode
 try:
@@ -23,7 +24,7 @@ except ImportError:
     torch = None
     TORCH_AVAILABLE = False
 
-from fastapi import FastAPI, HTTPException, Query, Depends
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from loguru import logger
@@ -45,10 +46,9 @@ from web.api.schemas import (
     HourlyForecastRequest,
     HourlyForecastResponse,
     PredictionRecord,
-    AccuracyStats,
     AccuracyReportResponse,
 )
-from web.api.accuracy import aggregate_errors, prediction_errors
+from web.api.storage.ledger import ForecastLedger
 from inference.forecast_blend import baseline_forecast
 
 # Global state for model
@@ -57,13 +57,10 @@ _config = None
 _weather_service = None
 _provider = None  # OpenMeteoProvider (keyless real data); set in lifespan
 
-# In-memory prediction storage (would use database in production)
-_predictions: dict[str, PredictionRecord] = {}
-_prediction_counter = 0
+# Durable daily forecast archive (single-host pilot)
+_ledger: Optional[ForecastLedger] = None
+_checkpoint_sha256: Optional[str] = None
 
-# Hourly prediction tracking for 5-minute verification
-_hourly_predictions: dict[str, dict] = {}  # key: lat_lon_datetime -> prediction data
-_hourly_verifications: list[dict] = []  # List of verification results
 _last_verification_time: Optional[datetime] = None
 _verification_task = None  # Background task for 5-minute verification
 
@@ -98,6 +95,7 @@ def get_forecaster():
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     global _forecaster, _config, _verification_task, _weather_service, _provider
+    global _ledger, _checkpoint_sha256
     from web.api.services.weather_service import WeatherService
 
     # Initialize Weather Service (OpenWeatherMap, optional - needs a key)
@@ -115,6 +113,8 @@ async def lifespan(app: FastAPI):
         _provider = None
 
     logger.info("Starting LILITH API...")
+    _ledger = ForecastLedger(os.environ.get("LILITH_LEDGER_PATH", "data/storage/forecast-ledger.sqlite3"))
+    _checkpoint_sha256 = None
 
     # Load model checkpoint
     from pathlib import Path
@@ -137,6 +137,8 @@ async def lifespan(app: FastAPI):
     # Load model if checkpoint provided
     if checkpoint_path and Path(checkpoint_path).exists():
         try:
+            with open(checkpoint_path, "rb") as checkpoint_file:
+                _checkpoint_sha256 = hashlib.sha256(checkpoint_file.read()).hexdigest()
             from inference.simple_forecaster import SimpleForecaster
 
             _forecaster = SimpleForecaster(
@@ -149,8 +151,9 @@ async def lifespan(app: FastAPI):
             import traceback
             traceback.print_exc()
             _forecaster = None
+            _checkpoint_sha256 = None
     else:
-        logger.warning("No checkpoint provided. Running in demo mode.")
+        logger.warning("No checkpoint provided. Serving labeled reference fallback products.")
         _forecaster = None
 
     # Start background tasks
@@ -171,6 +174,7 @@ async def lifespan(app: FastAPI):
         logger.info("Stopped verification background task")
 
     _forecaster = None
+    _ledger = None
 
 
 # Create FastAPI app
@@ -226,7 +230,7 @@ async def health_check():
 
 # Forecast endpoints
 def _add_uncertainty(daily: DailyForecast, lead_days: int) -> None:
-    """Attach 95%-style temperature bounds that widen with lead time."""
+    """Attach heuristic, uncalibrated temperature ranges that widen with lead time."""
     uncertainty = 2.0 + (lead_days / 14) * 2.0
     daily.temperature_max_lower = round(daily.temperature_max - uncertainty, 1)
     daily.temperature_max_upper = round(daily.temperature_max + uncertainty, 1)
@@ -244,6 +248,7 @@ def _daily_forecasts(forecasts: list, include_uncertainty: bool) -> list[DailyFo
             temperature_min=f["temperature_low"],
             precipitation=f["precipitation_mm"],
             precipitation_probability=min(1.0, max(0.0, f["precipitation_probability"] / 100.0)),
+            source=f.get("source"),
         )
         if include_uncertainty:
             _add_uncertainty(daily, f["day"])
@@ -272,7 +277,8 @@ async def _model_forecast(request: ForecastRequest, location: Location) -> Forec
         forecast_days=response["forecast_days"],
         forecasts=_daily_forecasts(response["forecasts"], request.include_uncertainty),
     )
-    _safe_store_predictions(location, response["generated_at"], response["forecasts"])
+    result.checkpoint_sha256 = _checkpoint_sha256
+    await _archive_response(result)
     return result
 
 
@@ -292,6 +298,8 @@ async def create_forecast(request: ForecastRequest):
 
     try:
         return await _model_forecast(request, location)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"Forecast error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -335,6 +343,17 @@ async def create_batch_forecast(request: BatchForecastRequest):
     )
 
 
+@app.get("/v1/forecast/runs/{run_id}", response_model=ForecastResponse, tags=["Forecast"])
+async def replay_forecast(run_id: str):
+    """Replay the original issuance without regenerating or changing its values."""
+    if _ledger is None:
+        raise HTTPException(status_code=503, detail="Forecast archive unavailable")
+    payload = await asyncio.to_thread(_ledger.replay, run_id)
+    if payload is None or "forecast_days" not in payload:
+        raise HTTPException(status_code=404, detail="Forecast run not found")
+    return payload
+
+
 # Historical data endpoints
 @app.post("/v1/historical", response_model=HistoricalResponse, tags=["Historical"])
 async def get_historical_data(request: HistoricalRequest):
@@ -343,8 +362,18 @@ async def get_historical_data(request: HistoricalRequest):
 
     Returns daily observations for the specified date range.
     """
-    # This would query the historical database
-    raise HTTPException(status_code=501, detail="Historical data not yet implemented")
+    from data.providers.ghcn_records import historical_station
+    try:
+        return await asyncio.to_thread(
+            historical_station, request.station_id, request.start_date, request.end_date,
+            Path(os.environ.get("LILITH_GHCN_CACHE", "data/raw/ghcn_records")), request.variables,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="GHCN station not found") from exc
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail="NOAA station data unavailable") from exc
 
 
 # Ensemble data endpoint
@@ -368,76 +397,29 @@ async def create_hourly_forecast(request: HourlyForecastRequest):
     Returns up to 168 hours (7 days) of detailed hourly predictions
     including temperature, humidity, wind, and precipitation.
     """
-    if _forecaster is None:
-        response = _generate_demo_hourly_forecast(request)
-        # Store predictions for 5-minute verification
-        for f in response.forecasts[:24]:  # Store next 24 hours
-            _store_hourly_prediction(
-                request.latitude,
-                request.longitude,
-                f.datetime[:16] + ":00",  # Round to hour
-                f.temperature,
-                f.precipitation,
-            )
-        return response
+    if _provider is None:
+        raise HTTPException(status_code=503, detail="Hourly reference provider unavailable")
+    rows = await asyncio.to_thread(_provider.hourly_forecast, request.latitude, request.longitude, request.hours)
+    if not rows:
+        raise HTTPException(status_code=503, detail="No complete hourly reference forecast available")
+    result = HourlyForecastResponse(
+        location=Location(latitude=request.latitude, longitude=request.longitude),
+        generated_at=datetime.now(timezone.utc),
+        model_version="Open-Meteo NWP reference (not Lilith hourly predictions)",
+        forecast_hours=len(rows), forecasts=[HourlyForecast(**row) for row in rows],
+    )
+    await _archive_response(result)
+    return result
 
-    try:
-        # Use SimpleForecaster's hourly interface
-        model_response = _forecaster.forecast_hourly(
-            latitude=request.latitude,
-            longitude=request.longitude,
-            hours=request.hours,
-        )
 
-        # Convert to Pydantic model
-        import datetime as dt
-
-        forecasts = []
-        for h in model_response['hourly']:
-            hourly = HourlyForecast(
-                datetime=h['time'],
-                hour=h['hour'],
-                temperature=h['temperature'],
-                feels_like=h['temperature'],  # SimpleForecaster doesn't compute feels_like
-                humidity=50.0,  # Not modeled
-                precipitation=0.0,
-                precipitation_probability=h['precipitation_probability'] / 100.0,
-                wind_speed=0.0,  # Not modeled
-                wind_direction=0.0,
-                cloud_cover=0.0,
-                pressure=1013.0,
-                uv_index=0.0,
-            )
-
-            if request.include_uncertainty:
-                uncertainty = 2.0
-                hourly.temperature_lower = round(h['temperature'] - uncertainty, 1)
-                hourly.temperature_upper = round(h['temperature'] + uncertainty, 1)
-
-            forecasts.append(hourly)
-
-            # Store for 5-minute verification (first 24 hours only)
-            if len(forecasts) <= 24:
-                _store_hourly_prediction(
-                    request.latitude,
-                    request.longitude,
-                    h['time'][:16] + ":00",  # Round to hour
-                    h['temperature'],
-                    0.0,
-                )
-
-        return HourlyForecastResponse(
-            location=Location(latitude=request.latitude, longitude=request.longitude),
-            generated_at=model_response['generated_at'],
-            model_version="SimpleLILITH v1 (hourly interpolated)",
-            forecast_hours=model_response['hours'],
-            forecasts=forecasts,
-        )
-
-    except Exception as e:
-        logger.exception(f"Hourly forecast error: {e}")
-        # Fall back to demo if model fails
-        return _generate_demo_hourly_forecast(request)
+@app.get("/v1/forecast/hourly/runs/{run_id}", response_model=HourlyForecastResponse, tags=["Forecast"])
+async def replay_hourly_forecast(run_id: str):
+    if _ledger is None:
+        raise HTTPException(status_code=503, detail="Forecast archive unavailable")
+    payload = await asyncio.to_thread(_ledger.replay, run_id)
+    if payload is None or "forecast_hours" not in payload:
+        raise HTTPException(status_code=404, detail="Hourly run not found")
+    return payload
 
 
 # Prediction accuracy endpoints
@@ -453,10 +435,10 @@ async def get_accuracy_report(
     Compares past predictions to actual observations and calculates
     accuracy metrics like MAE, RMSE, and accuracy by lead time.
     """
-    # Auto-verify any unverified predictions that can be checked (off the loop).
-    await asyncio.to_thread(_verify_predictions_with_actuals)
-
-    return _generate_accuracy_report(latitude, longitude, days_back)
+    if (latitude is None) != (longitude is None):
+        raise HTTPException(status_code=422, detail="Supply both latitude and longitude")
+    # Reading a report never starts remote provider work.
+    return await asyncio.to_thread(_generate_accuracy_report, latitude, longitude, days_back)
 
 
 @app.get("/v1/accuracy/predictions", response_model=list[PredictionRecord], tags=["Accuracy"])
@@ -469,15 +451,9 @@ async def get_predictions(
 
     Returns stored predictions with their actual observations (if available).
     """
-    predictions = list(_predictions.values())
-
-    if verified_only:
-        predictions = [p for p in predictions if p.actual_temp_max is not None]
-
-    # Sort by predicted_at descending
-    predictions.sort(key=lambda x: x.predicted_at, reverse=True)
-
-    return predictions[:limit]
+    if _ledger is None:
+        raise HTTPException(status_code=503, detail="Forecast archive unavailable")
+    return await asyncio.to_thread(_ledger.records, limit=limit, verified_only=verified_only)
 
 
 @app.post("/v1/accuracy/verify", tags=["Accuracy"])
@@ -488,8 +464,9 @@ async def verify_predictions():
     This endpoint fetches actual weather data and updates prediction
     records with observed values and error calculations.
     """
-    verified_count = await asyncio.to_thread(_verify_predictions_with_actuals)
-    return {"message": f"Verified {verified_count} predictions", "verified_count": verified_count}
+    # Mutation is operator-only through the CLI, avoiding unbounded provider calls
+    # from a public endpoint. The background worker also processes bounded batches.
+    raise HTTPException(status_code=405, detail="Use the operator verification CLI")
 
 
 # Station endpoints (backed by the real GHCN training-station list)
@@ -588,11 +565,11 @@ async def _generate_fallback_forecast(request: ForecastRequest) -> ForecastRespo
             result = ForecastResponse(
                 location=location,
                 generated_at=_dt.now(),
-                model_version="Open-Meteo + climatology (keyless, no model loaded)",
+                model_version="Open-Meteo + heuristic seasonal baseline (no model loaded)",
                 forecast_days=len(day_dicts),
                 forecasts=_daily_forecasts(day_dicts, request.include_uncertainty),
             )
-            _safe_store_predictions(location, result.generated_at.isoformat(), day_dicts)
+            await _archive_response(result)
             return result
 
     # 2. OpenWeatherMap fallback (only if a key is configured).
@@ -625,13 +602,15 @@ async def _generate_fallback_forecast(request: ForecastRequest) -> ForecastRespo
                     _add_uncertainty(daily, i + 1)
                 forecasts.append(daily)
 
-            return ForecastResponse(
+            result = ForecastResponse(
                 location=location,
                 generated_at=_dt.now(),
                 model_version="OpenWeatherMap (fallback)",
                 forecast_days=len(forecasts),
                 forecasts=forecasts,
             )
+            await _archive_response(result)
+            return result
 
     raise HTTPException(
         status_code=503,
@@ -639,250 +618,43 @@ async def _generate_fallback_forecast(request: ForecastRequest) -> ForecastRespo
     )
 
 
-def _generate_demo_hourly_forecast(request: HourlyForecastRequest) -> HourlyForecastResponse:
-    """Generate demo hourly forecast when model is not loaded."""
-    import datetime
-    import math
-    import random
-
-    lat = request.latitude
-    lon = request.longitude
-    now = datetime.datetime.now()
-
-    # Seed for consistency
-    random.seed(int(lat * 10000 + lon * 10000 + now.hour))
-
-    # Base temperature calculation (same as daily)
-    abs_lat = abs(lat)
-    is_northern = lat >= 0
-
-    if abs_lat < 23:
-        annual_mean = 26 - abs_lat * 0.1
-    elif abs_lat < 35:
-        annual_mean = 24 - (abs_lat - 23) * 0.5
-    elif abs_lat < 50:
-        annual_mean = 18 - (abs_lat - 35) * 0.6
-    elif abs_lat < 66:
-        annual_mean = 9 - (abs_lat - 50) * 0.5
-    else:
-        annual_mean = -5 - (abs_lat - 66) * 0.4
-    
-    # Simple diurnal cycle
-    forecasts = []
-    
-    # Generate 168 hours (7 days) or requested hours
-    hours_to_generate = request.hours
-    
-    for i in range(hours_to_generate):
-        forecast_time = now + datetime.timedelta(hours=i)
-        
-        # Diurnal cycle
-        hour = forecast_time.hour
-        # Peak temperature around 3 PM (15:00), lowest around 5 AM
-        diurnal_cycle = 5 * math.cos((hour - 15) * math.pi / 12)
-        
-        # Seasonal trend (simplified)
-        seasonal_trend = 0  # Ignore for short term
-        
-        temperature = annual_mean + diurnal_cycle
-        
-        # Add some random noise
-        temperature += random.gauss(0, 1)
-        
-        # Precipitation chance
-        precip_prob = max(0, min(100, 20 + 30 * math.sin(i / 24 * math.pi)))
-        
-        forecasts.append(HourlyForecast(
-            datetime=forecast_time.isoformat(),
-            hour=hour,
-            temperature=round(temperature, 1),
-            feels_like=round(temperature - 1, 1), # Wind chill / heat index?
-            humidity=round(50 + 20 * math.sin((hour + 6) * math.pi / 12), 0),
-            precipitation=0.0,
-            precipitation_probability=round(precip_prob / 100.0, 2),
-            wind_speed=round(max(0, 10 + 5 * math.sin(i/10)), 1),
-            wind_direction=round((i * 10) % 360, 0),
-            cloud_cover=round(max(0, min(100, 40 + 40 * math.sin(i / 12))), 0),
-            pressure=1013.0,
-            uv_index=round(max(0, 8 * math.sin((hour - 6) * math.pi / 12)) if 6 <= hour <= 18 else 0, 1),
-        ))
-
-    return HourlyForecastResponse(
-        location=Location(latitude=lat, longitude=lon),
-        generated_at=now,
-        model_version="demo-v1 (hourly interpolated)",
-        forecast_hours=hours_to_generate,
-        forecasts=forecasts
-    )
-
-
-# Keep the prediction store bounded so a long-running server doesn't leak memory.
-_MAX_STORED_PREDICTIONS = 5000
-# How many lead days of each forecast to track for verification (Open-Meteo can
-# supply real actuals once these dates pass).
-_STORE_LEAD_DAYS = 7
-
-
-def _safe_store_predictions(location: Location, generated_at: str, day_dicts: list) -> None:
-    """Store the near-term forecast days for later verification (never raises)."""
+async def _archive_response(result: ForecastResponse | HourlyForecastResponse) -> None:
+    """A returned daily forecast must have a durable, replayable issuance."""
+    if _ledger is None:
+        raise HTTPException(status_code=503, detail="Forecast archive unavailable")
     try:
-        _store_predictions(location, generated_at, day_dicts)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(f"Failed to store predictions for tracking: {exc}")
-
-
-def _store_predictions(location: Location, generated_at: str, day_dicts: list) -> None:
-    global _prediction_counter
-
-    for f in day_dicts[:_STORE_LEAD_DAYS]:
-        _prediction_counter += 1
-        pred_id = f"PRED-{_prediction_counter:06d}"
-        _predictions[pred_id] = PredictionRecord(
-            id=pred_id,
-            location=Location(latitude=location.latitude, longitude=location.longitude),
-            predicted_at=generated_at,
-            target_date=f["date"],
-            predicted_temp_max=f["temperature_high"],
-            predicted_temp_min=f["temperature_low"],
-            predicted_precipitation=f["precipitation_mm"],
-            predicted_precip_prob=min(1.0, max(0.0, f["precipitation_probability"] / 100.0)),
-            lead_days=f["day"],
-        )
-
-    # Evict oldest records beyond the cap.
-    if len(_predictions) > _MAX_STORED_PREDICTIONS:
-        for key in list(_predictions)[: len(_predictions) - _MAX_STORED_PREDICTIONS]:
-            _predictions.pop(key, None)
-
-
-def _store_hourly_prediction(lat: float, lon: float, target_time: str, temp: float, precip: float):
-    """Store an hourly prediction (used by the hourly endpoint)."""
-    key = f"{lat:.4f}_{lon:.4f}_{target_time}"
-    _hourly_predictions[key] = {
-        "lat": lat,
-        "lon": lon,
-        "target_time": target_time,
-        "temperature": temp,
-        "precipitation": precip,
-        "stored_at": datetime.now().isoformat(),
-    }
+        writer = _ledger.archive_hourly if isinstance(result, HourlyForecastResponse) else _ledger.archive
+        result.run_id = await asyncio.to_thread(writer, result.model_dump(mode="json"))
+    except Exception as exc:
+        logger.exception("Forecast archive write failed")
+        raise HTTPException(status_code=503, detail="Could not archive forecast") from exc
 
 
 async def _verification_loop():
-    """Periodically verify stored predictions against real observations."""
+    """Bounded modeled-reference comparisons, separate from station verification."""
     global _last_verification_time
-
     while True:
         try:
             count = await asyncio.to_thread(_verify_predictions_with_actuals)
             if count:
-                logger.info(f"Verified {count} prediction(s) against real observations")
-            _last_verification_time = datetime.now()
-            await asyncio.sleep(300)  # every 5 minutes
+                logger.info(f"Compared {count} predictions with modeled reference data")
+            _last_verification_time = datetime.now(timezone.utc)
+            await asyncio.sleep(300)
         except asyncio.CancelledError:
-            break
-        except Exception as e:
-            logger.error(f"Error in verification loop: {e}")
+            raise
+        except Exception as exc:
+            logger.warning(f"Reference comparison delayed: {exc}")
             await asyncio.sleep(60)
 
 
 def _verify_predictions_with_actuals() -> int:
-    """
-    Fill in real observed values for past predictions and compute real errors.
-
-    Uses Open-Meteo (keyless). Predictions whose target date hasn't passed, or for
-    which no observation is available, are left untouched - nothing is fabricated.
-    """
-    if _provider is None:
+    if _ledger is None or _provider is None:
         return 0
-
-    today = datetime.now().date()
-    verified_count = 0
-
-    for record in list(_predictions.values()):
-        if record.actual_temp_max is not None:
-            continue
-        target = (
-            date.fromisoformat(record.target_date)
-            if isinstance(record.target_date, str)
-            else record.target_date
-        )
-        if target >= today:
-            continue
-
-        obs = _provider.daily_observations(
-            record.location.latitude, record.location.longitude, target
-        )
-        if not obs:
-            continue
-
-        record.actual_temp_max = round(obs["tmax"], 1)
-        record.actual_temp_min = round(obs["tmin"], 1)
-        record.actual_precipitation = round(obs["prcp"], 1)
-        errs = prediction_errors(
-            record.predicted_temp_max,
-            record.predicted_temp_min,
-            record.predicted_precipitation,
-            obs["tmax"],
-            obs["tmin"],
-            obs["prcp"],
-        )
-        record.temp_max_error = errs["temp_max_error"]
-        record.temp_min_error = errs["temp_min_error"]
-        record.precip_error = errs["precip_error"]
-        verified_count += 1
-
-    return verified_count
+    from web.api.verification import compare_pending
+    return compare_pending(_ledger, _provider)
 
 
 def _generate_accuracy_report(lat, lon, days) -> AccuracyReportResponse:
-    """Build a real accuracy report from verified predictions."""
-    now = datetime.now()
-    records = list(_predictions.values())
-
-    location_filter = None
-    if lat is not None and lon is not None:
-        records = [
-            r
-            for r in records
-            if abs(r.location.latitude - lat) < 0.5 and abs(r.location.longitude - lon) < 0.5
-        ]
-        location_filter = f"{lat:.4f},{lon:.4f}"
-
-    verified = [r for r in records if r.actual_temp_max is not None]
-    samples = [
-        {
-            "lead_days": r.lead_days,
-            "temp_max_error": r.temp_max_error if r.temp_max_error is not None else 0.0,
-            "temp_min_error": r.temp_min_error if r.temp_min_error is not None else 0.0,
-            "predicted_precipitation": r.predicted_precipitation,
-            "actual_precipitation": r.actual_precipitation
-            if r.actual_precipitation is not None
-            else 0.0,
-        }
-        for r in verified
-    ]
-    agg = aggregate_errors(samples)
-
-    stats = AccuracyStats(
-        total_predictions=len(records),
-        verified_predictions=agg["verified_predictions"],
-        temp_max_mae=agg["temp_max_mae"],
-        temp_max_rmse=agg["temp_max_rmse"],
-        temp_min_mae=agg["temp_min_mae"],
-        temp_min_rmse=agg["temp_min_rmse"],
-        precip_mae=agg["precip_mae"],
-        precip_accuracy=agg["precip_accuracy"],
-        accuracy_by_lead_day=agg["accuracy_by_lead_day"],
-    )
-
-    recent = sorted(records, key=lambda r: str(r.predicted_at), reverse=True)[:50]
-
-    return AccuracyReportResponse(
-        generated_at=now,
-        period_start=(now - timedelta(days=days)).date().isoformat(),
-        period_end=now.date().isoformat(),
-        stats=stats,
-        recent_predictions=recent,
-        location_filter=location_filter,
-    )
+    if _ledger is None:
+        raise HTTPException(status_code=503, detail="Forecast archive unavailable")
+    return AccuracyReportResponse(**_ledger.report(lat=lat, lon=lon, days=days))

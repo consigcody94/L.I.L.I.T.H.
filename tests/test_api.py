@@ -10,13 +10,28 @@ from web.api.main import app
 
 
 @pytest.fixture
-def client():
+def client(tmp_path, monkeypatch):
     """Create test client.
 
     Use the context-manager form so FastAPI's lifespan runs and the keyless
     Open-Meteo provider is initialized; otherwise the forecast endpoints have
     no data source and correctly return 503.
     """
+    from data.providers.open_meteo import OpenMeteoProvider
+    from data.providers import ghcn_records
+    import web.api.main as api
+    monkeypatch.setenv("LILITH_LEDGER_PATH", str(tmp_path / "ledger.sqlite3"))
+    monkeypatch.setenv("LILITH_CHECKPOINT", str(tmp_path / "absent.pt"))
+    monkeypatch.setattr(api, "_verify_predictions_with_actuals", lambda: 0)
+    def reference(*_):
+        from datetime import timedelta
+        tomorrow = date.today() + timedelta(days=1)
+        return {"dates": [(tomorrow + timedelta(days=i)).isoformat() for i in range(14)],
+                "tmax": [10] * 14, "tmin": [2] * 14, "prcp": [1] * 14, "precip_prob": [20] * 14}
+    monkeypatch.setattr(OpenMeteoProvider, "reference_forecast", reference)
+    monkeypatch.setattr(ghcn_records, "historical_station", lambda *args: {
+        "station_id": args[0], "station_name": "Fixture station", "total_observations": 1,
+        "observations": [{"date": "2020-01-01", "temperature_max": 10}]})
     with TestClient(app) as c:
         yield c
 
@@ -232,8 +247,8 @@ class TestStationsEndpoint:
 class TestHistoricalEndpoint:
     """Tests for historical data endpoint."""
 
-    def test_historical_not_implemented(self, client):
-        """Test historical endpoint returns not implemented."""
+    def test_historical_records(self, client):
+        """Test historical endpoint returns station records."""
         response = client.post(
             "/v1/historical",
             json={
@@ -243,8 +258,8 @@ class TestHistoricalEndpoint:
             }
         )
 
-        # Should return 501 Not Implemented
-        assert response.status_code == 501
+        assert response.status_code == 200
+        assert response.json()["total_observations"] == 1
 
 
 class TestErrorHandling:
